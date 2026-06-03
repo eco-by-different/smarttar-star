@@ -1,6 +1,6 @@
 # STAR Format
 
-`.star` je běžný TAR kontejner s pevnou vnitřní strukturou:
+A `.star` file is a standard TAR outer container with this internal structure:
 
 ```text
 manifest.json
@@ -9,7 +9,7 @@ blocks/
 
 ## manifest.json
 
-Manifest obsahuje metadata archivu:
+The manifest contains archive metadata:
 
 ```json
 {
@@ -23,35 +23,35 @@ Manifest obsahuje metadata archivu:
 }
 ```
 
-Důležité položky:
+Important fields:
 
-- `sourceName` - kořenový název původního souboru nebo složky.
-- `sourceType` - `File` nebo `Folder`.
-- `blocks` - seznam interních TAR bloků.
-- `sha256` - hash každého interního bloku.
+- `sourceName` - root name of the original file or folder.
+- `sourceType` - `File` or `Folder`.
+- `blocks` - list of internal TAR blocks.
+- `sha256` - integrity hash of each internal block.
 
-## Extrakční logika
+## Extraction behavior
 
-Uživatel vybírá rodičovskou cílovou složku.
+The user selects a parent target folder.
 
-Příklad:
+Example:
 
 ```text
 sourceName = A
 target = C:\Users\User\Desktop
 ```
 
-Výsledek:
+Output:
 
 ```text
 C:\Users\User\Desktop\A\...
 ```
 
-Pokud `C:\Users\User\Desktop\A` existuje, aplikace zobrazí Yes/No overwrite dialog.
+If `C:\Users\User\Desktop\A` already exists, SmartTAR displays a Yes/No overwrite dialog.
 
-## Ruční recovery
+## Manual recovery
 
-V nouzi lze `.star` přejmenovat nebo otevřít jako TAR:
+A `.star` archive can be inspected or recovered manually as a TAR archive:
 
 ```powershell
 tar -xf archive.star -C outer

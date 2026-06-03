@@ -1,32 +1,32 @@
 # Release checklist
 
-## Před buildem
+## Before build
 
-- [ ] `src/SmartTAR.ps1` obsahuje finální Fix 4 kód.
-- [ ] V kódu nejsou HTML escape znaky `&amp;`, `&gt;`, `&lt;`.
-- [ ] Verze v GUI odpovídá Fix 4.
-- [ ] Verze v manifestu odpovídá Fix 4.
-- [ ] README popisuje `_smarttar_tmp`.
-- [ ] README říká, že admin režim není potřeba.
+- [ ] `src/SmartTAR.ps1` contains the final Fix 4 source code.
+- [ ] The source code contains no HTML escape strings: `&amp;`, `&gt;`, `&lt;`.
+- [ ] GUI version text matches Fix 4.
+- [ ] Manifest `toolVersion` matches Fix 4.
+- [ ] README documents `_smarttar_tmp`.
+- [ ] README states that administrator mode is not required.
 
-## Test scriptu
+## Script test
 
-- [ ] Compress file.
-- [ ] Compress folder `A` obsahující `B` a `C`.
-- [ ] Verify archive.
-- [ ] Extract archive do parent složky.
-- [ ] Ověřit výsledek `parent\A\B` a `parent\A\C`.
-- [ ] Ověřit overwrite Yes/No, pokud `parent\A` existuje.
-- [ ] Ověřit, že `_smarttar_tmp` se uklidí.
+- [ ] Compress a single file.
+- [ ] Compress a folder `A` containing folders `B` and `C`.
+- [ ] Verify the archive.
+- [ ] Extract the archive into a parent folder.
+- [ ] Confirm output structure: `parent\A\B` and `parent\A\C`.
+- [ ] Confirm the overwrite Yes/No prompt when `parent\A` already exists.
+- [ ] Confirm that `_smarttar_tmp` is cleaned up.
 
-## Test EXE
+## EXE test
 
-- [ ] EXE jde spustit jako běžný uživatel.
-- [ ] Compress funguje.
-- [ ] Verify funguje.
-- [ ] Extract funguje.
-- [ ] Overwrite dialog funguje.
-- [ ] `_smarttar_tmp` se uklidí.
+- [ ] EXE starts as a normal user.
+- [ ] Compress works.
+- [ ] Verify works.
+- [ ] Extract works.
+- [ ] Overwrite dialog works.
+- [ ] `_smarttar_tmp` is cleaned up.
 
 ## GitHub release assets
 
@@ -34,4 +34,4 @@
 - [ ] `README.md`
 - [ ] `CHANGELOG.md`
 - [ ] `LICENSE`
-- [ ] volitelně `SmartTAR.ps1`
+- [ ] optional: `SmartTAR.ps1`

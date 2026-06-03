@@ -1,34 +1,34 @@
 # SmartTAR STAR
 
-SmartTAR STAR je jednoduchý Windows GUI nástroj pro vytváření a rozbalování transparentních `.star` archivů.
+SmartTAR STAR is a simple Windows GUI tool for creating, verifying, and extracting transparent `.star` archives.
 
-`.star` archiv je klasický TAR kontejner, který obsahuje:
+A `.star` archive is a standard TAR outer container with this internal structure:
 
 ```text
 manifest.json
 blocks/
 ```
 
-Uvnitř jsou jednotlivé bloky komprimované podle zvoleného režimu. Archiv jde v nouzi otevřít ručně přes `tar.exe`, protože vnější kontejner je běžný TAR.
+Internal blocks are compressed according to the selected compression mode. Because the outer container is a normal TAR archive, the archive can be inspected or recovered manually with `tar.exe` if needed.
 
-## Stav verze
+## Current version
 
-Aktuální doporučená verze:
+Recommended version:
 
 ```text
 SmartTAR STAR 1.0 Beta 1 Fix 4
 ```
 
-Hlavní vlastnosti Fix 4:
+Fix 4 highlights:
 
-- reliable local staging přes `_smarttar_tmp`,
-- safe extraction přes `_smarttar_tmp`,
-- automatický úklid dočasné složky po operaci,
-- extrakce do rodičovské složky, ne do `*_extracted`,
-- pokud cílový root existuje, zobrazí se Yes/No overwrite dotaz,
-- není potřeba spouštět jako administrátor.
+- reliable local staging through `_smarttar_tmp`,
+- safe extraction through `_smarttar_tmp`,
+- automatic temporary folder cleanup after operations,
+- extraction target is now a parent folder, not `*_extracted`,
+- Yes/No overwrite prompt when the extracted root already exists,
+- administrator mode is not required and is not recommended by default.
 
-## Doporučená struktura repozitáře
+## Repository structure
 
 ```text
 SmartTAR/
@@ -45,46 +45,40 @@ SmartTAR/
 └─ .gitignore
 ```
 
-## Jak vložit zdrojový kód
+## Source code
 
-Do souboru:
+The main source file should be stored as:
 
 ```text
 src/SmartTAR.ps1
 ```
 
-vlož finální ověřený script:
+For GitHub, use the stable source filename `src/SmartTAR.ps1`. Versioned filenames can be used for release assets if desired.
 
-```text
-SmartTAR_STAR_1.0_beta1_fix4_safe_extract_cleanup_overwrite.ps1
-```
+## Build EXE
 
-Pro GitHub je lepší držet stabilní název `src/SmartTAR.ps1`, zatímco release asset může mít dlouhý verzovaný název.
-
-## EXE build
-
-Doporučený postup je popsaný v:
+Recommended build instructions are available in:
 
 ```text
 docs/BUILD_EXE.md
 ```
 
-## Dočasná složka
+## Temporary folder
 
-SmartTAR používá dočasnou složku vedle scriptu / EXE:
+SmartTAR creates a temporary local staging folder next to the script or executable:
 
 ```text
 _smarttar_tmp
 ```
 
-Důvod je kompatibilita s Windows `tar.exe` u mapovaných disků, Plochy, OneDrive a lokalizovaných cest.
+This is intentional. It avoids Windows `tar.exe` issues with mapped drives, Desktop folders, OneDrive-managed folders, protected paths, and localized user-profile paths.
 
-Dočasné pracovní složky se po operaci automaticky mažou. Kořenová `_smarttar_tmp` se smaže také, pokud je prázdná.
+Temporary working folders are removed automatically after each operation. The `_smarttar_tmp` root folder is also removed when it is empty.
 
-## Spouštění jako administrátor
+## Administrator mode
 
-Spuštění jako administrátor není potřeba a není doporučené jako výchozí režim. U mapovaných disků může elevated/admin proces vidět jiné disky než běžný uživatel.
+Running SmartTAR as administrator is not required and is not recommended by default. Elevated processes may not see the same mapped drives as the normal user session.
 
-## Licence
+## License
 
-MIT License. Viz `LICENSE`.
+MIT License. See `LICENSE`.

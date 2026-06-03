@@ -1,17 +1,17 @@
 # Build EXE
 
-Tento dokument popisuje doporučený postup pro vytvoření `.exe` ze `src/SmartTAR.ps1`.
+This document describes the recommended process for building an `.exe` from `src/SmartTAR.ps1`.
 
-## Doporučení
+## Recommendations
 
-- Build dělej z finálního `src/SmartTAR.ps1`.
-- EXE nespouštěj defaultně jako administrátor.
-- EXE nech vytvářet `_smarttar_tmp` ve složce, kde je EXE uložené.
-- EXE ukládej do `dist/` nebo `release/`, které nejsou v Git repozitáři.
+- Build from the final `src/SmartTAR.ps1` file.
+- Do not require administrator mode by default.
+- Let the EXE create `_smarttar_tmp` next to the EXE file.
+- Store build outputs in `dist/` or `release/`. These folders are ignored by Git.
 
-## Varianta přes PS2EXE
+## Build with PS2EXE
 
-Příklad příkazu:
+Example command:
 
 ```powershell
 Invoke-ps2exe `
@@ -25,16 +25,16 @@ Invoke-ps2exe `
   -version "1.0.0.4"
 ```
 
-Pokud používáš grafickou verzi PS2EXE, nastav:
+If a PS2EXE GUI is used, recommended settings are:
 
 ```text
 Input:  src\SmartTAR.ps1
 Output: dist\SmartTAR.exe
 No console: yes
-STA mode: yes, pokud je k dispozici
+STA mode: yes, if available
 ```
 
-## Doporučený release obsah
+## Recommended release assets
 
 ```text
 SmartTAR.exe
@@ -43,24 +43,24 @@ CHANGELOG.md
 LICENSE
 ```
 
-Volitelně:
+Optional:
 
 ```text
-src\SmartTAR.ps1
+SmartTAR.ps1
 ```
 
-## Test po buildu
+## Post-build test
 
-1. Spustit EXE normálně jako běžný uživatel.
-2. Komprimovat malou složku `A` se složkami `B` a `C`.
-3. Ověřit `.star` přes Verify.
-4. Extrahovat do parent složky.
-5. Ověřit výsledek:
+1. Run the EXE as a normal user.
+2. Compress a small folder `A` containing folders `B` and `C`.
+3. Verify the `.star` archive.
+4. Extract the archive into a parent folder.
+5. Confirm the output structure:
 
 ```text
 parent\A\B
 parent\A\C
 ```
 
-6. Znovu extrahovat do stejného parentu a ověřit Yes/No overwrite dialog.
-7. Ověřit, že po dokončení nezůstala neprázdná `_smarttar_tmp`.
+6. Extract again into the same parent folder and confirm that the Yes/No overwrite dialog appears.
+7. Confirm that `_smarttar_tmp` is cleaned up after the operation.
