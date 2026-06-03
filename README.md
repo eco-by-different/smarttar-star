@@ -39,17 +39,7 @@ SmartTAR focuses on **transparent recovery, readable archive structure, and auto
 
 ## Screenshot
 
-Place your GUI screenshot here:
-
-```text
-docs/images/smarttar-gui.png
-```
-
-Then enable it in this README by replacing this paragraph with:
-
-```markdown
 ![SmartTAR STAR GUI](docs/images/smarttar-gui.png)
-```
 
 ---
 
