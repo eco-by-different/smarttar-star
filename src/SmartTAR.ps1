@@ -1,14 +1,26 @@
 # ============================================================================
-# SmartTAR STAR 1.0 Beta 1 Fix 2 XZ9 XZStable
+# SmartTAR STAR 1.0 Beta 1
+# Root Preserving Smart Hybrid Archive Tool
 # Powered by Windows tar.exe / bsdtar only
 #
-# Final adjustment in this build:
-#   - XZ uses XZ9 when supported, fallback to default XZ.
-#   - Internal mode name is SmartXZ.
-#   - Timestamp normalization is applied to XZ/XZ9 block stages in all modes.
-#   - STORE and ZSTD block stages are not normalized.
-#   - Outer .star workspace timestamps are normalized when at least one XZ/XZ9
-#     block exists, so Hybrid/Smart/Solid with XZ become more repeatable.
+# Build:
+#   SmartTAR STAR 1.0 Beta 1 - Root Preserving Smart Hybrid v8.2
+#
+# Change in v8.2:
+#   - GUI mode names cleaned up to exactly four user-facing modes:
+#       Mode - Hybrid - recommended
+#       Mode - Smart - grouped blocks
+#       Mode - SmartXZ - grouped XZ blocks
+#       Mode - Solid - one compressed block
+#   - Removed Store as a user-facing mode.
+#   - STORE remains an internal compression method for already-compressed data.
+#   - Kept v8.1 VERIFY empty-selection fix.
+#
+# Core rules:
+#   - NO folder-name deduplication.
+#   - The selected root folder is preserved exactly.
+#   - Every internal block contains the selected root prefix.
+#   - Same-name child folders are valid content and must be restored.
 # ============================================================================
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -71,6 +83,7 @@ function Get-ErrorDetails {
 
 function Get-FileSHA256 {
     param([string]$Path)
+    if (Is-Blank $Path) { throw "Cannot hash an empty path." }
     if (-not (Test-Path -LiteralPath $Path)) { throw "Cannot hash missing file: $Path" }
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
@@ -78,6 +91,7 @@ function Get-FileSHA256 {
 function Get-DirectorySize {
     param([string]$Path)
     try {
+        if (Is-Blank $Path) { return [int64]0 }
         $item = Get-Item -LiteralPath $Path -ErrorAction Stop
         if (-not $item.PSIsContainer) { return [int64]$item.Length }
         $sum = [int64]0
@@ -91,6 +105,7 @@ function Get-FixedUtcText { return "2000-01-01T00:00:00Z" }
 
 function Set-TreeTimestamp {
     param([string]$Path,[datetime]$Timestamp)
+    if (Is-Blank $Path) { return }
     if (-not (Test-Path -LiteralPath $Path)) { return }
     Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
         try { $_.CreationTimeUtc = $Timestamp } catch {}
@@ -110,6 +125,7 @@ function Get-ReportPath {
     $dir = [System.IO.Path]::GetDirectoryName($BasePath)
     if (Is-Blank $dir) { $dir = (Get-Location).Path }
     $name = [System.IO.Path]::GetFileName($BasePath)
+    if (Is-Blank $name) { $name = "SmartTAR" }
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
     return (Join-Path $dir ("$name.$Kind.$stamp.txt"))
 }
@@ -138,7 +154,7 @@ $script:selectedType = ""
 function New-EcoLabel { param([string]$Text,[int]$X,[int]$Y,[int]$W=470,[int]$H=20,[System.Drawing.Font]$Font=$fNormal,[System.Drawing.Color]$ForeColor=$cTxt) return New-UiObject "System.Windows.Forms.Label" @{Text=$Text; Location=(New-Point $X $Y); Size=(New-Size $W $H); Font=$Font; ForeColor=$ForeColor; BackColor=$cBg} }
 function New-EcoButton { param([string]$Text,[int]$X,[int]$Y,[int]$W,[int]$H,[System.Drawing.Font]$Font=$fNormal,[System.Drawing.Color]$BackColor=$cBg,[System.Drawing.Color]$ForeColor=[System.Drawing.Color]::Black) $button = New-UiObject "System.Windows.Forms.Button" @{Text=$Text; Location=(New-Point $X $Y); Size=(New-Size $W $H); Font=$Font; BackColor=$BackColor; ForeColor=$ForeColor; UseVisualStyleBackColor=$false}; try { $button.FlatStyle=[System.Windows.Forms.FlatStyle]::Flat; $button.FlatAppearance.BorderSize=1; $button.FlatAppearance.BorderColor=$cGray } catch {}; return $button }
 function New-EcoCheck { param([string]$Text,[int]$X,[int]$Y,[int]$W,[bool]$Checked=$true) return New-UiObject "System.Windows.Forms.CheckBox" @{Text=$Text; Location=(New-Point $X $Y); Size=(New-Size $W 22); Font=$fNormal; BackColor=$cBg; ForeColor=$cTxt; Checked=$Checked} }
-function Msg { param([string]$Message,[string]$Title="SmartTAR STAR - Root Preserving Smart Hybrid v8",[System.Windows.Forms.MessageBoxIcon]$Icon=[System.Windows.Forms.MessageBoxIcon]::Information,[System.Windows.Forms.MessageBoxButtons]$Buttons=[System.Windows.Forms.MessageBoxButtons]::OK) return [System.Windows.Forms.MessageBox]::Show($Message,$Title,$Buttons,$Icon) }
+function Msg { param([string]$Message,[string]$Title="SmartTAR STAR 1.0 Beta 1",[System.Windows.Forms.MessageBoxIcon]$Icon=[System.Windows.Forms.MessageBoxIcon]::Information,[System.Windows.Forms.MessageBoxButtons]$Buttons=[System.Windows.Forms.MessageBoxButtons]::OK) return [System.Windows.Forms.MessageBox]::Show($Message,$Title,$Buttons,$Icon) }
 function Set-AppStatus { param([string]$Text,[System.Drawing.Color]$Color=[System.Drawing.Color]::DimGray) $lblStatus.Text=$Text; $lblStatus.ForeColor=$Color; $form.Refresh(); [System.Windows.Forms.Application]::DoEvents() }
 function Start-UiWork { $progressBar.Visible=$true; $progressBar.MarqueeAnimationSpeed=25; $form.Refresh(); [System.Windows.Forms.Application]::DoEvents() }
 function Stop-UiWork { $progressBar.MarqueeAnimationSpeed=0; $progressBar.Visible=$false; $form.Refresh() }
@@ -148,6 +164,7 @@ function Stop-UiWork { $progressBar.MarqueeAnimationSpeed=0; $progressBar.Visibl
 # ============================================================================
 function Invoke-Tar {
     param([string]$TarPath,$TarArgs,[string]$FailMessage)
+    if (Is-Blank $TarPath) { throw "tar.exe path is empty." }
     $argList = @()
     foreach ($arg in @($TarArgs)) { $argList += [string]$arg }
     $output = & $TarPath @argList 2>&1
@@ -157,7 +174,7 @@ function Invoke-Tar {
         throw "$FailMessage tar.exe exit code: $LASTEXITCODE`r`n$text"
     }
 }
-function Test-TarListOk { param([string]$TarPath,[string]$ArchivePath) $null = & $TarPath @("-tf",$ArchivePath) 2>&1; return ($LASTEXITCODE -eq 0) }
+function Test-TarListOk { param([string]$TarPath,[string]$ArchivePath) if(Is-Blank $ArchivePath){return $false}; $null = & $TarPath @("-tf",$ArchivePath) 2>&1; return ($LASTEXITCODE -eq 0) }
 
 function Get-BlockMethod {
     param([string]$Name)
@@ -200,7 +217,6 @@ function Get-ModeGroupName {
 
 function Get-GroupMethodName {
     param([string]$Mode,[string]$GroupName)
-    if($Mode -eq "Store"){ return "store" }
     if($GroupName -eq "stored" -or $GroupName -eq "media" -or $GroupName -eq "archives"){ return "store" }
     return "xz9"
 }
@@ -291,9 +307,10 @@ function Create-BlockFromStage {
     } catch {
         if($Method.Name -ne "store"){
             $fallback=Get-BlockMethod "store"
-            $args=@(); $args += $fallback.Args; $args += $BlockPath.Replace($Method.Extension,".tar"); $args += "-C"; $args += $StagePath; $args += "."
+            $fallbackPath=$BlockPath.Replace($Method.Extension,".tar")
+            $args=@(); $args += $fallback.Args; $args += $fallbackPath; $args += "-C"; $args += $StagePath; $args += "."
             Invoke-Tar $TarPath $args "Block creation fallback failed."
-            return $BlockPath.Replace($Method.Extension,".tar")
+            return $fallbackPath
         }
         throw
     }
@@ -314,7 +331,9 @@ function Build-Blocks {
         $actualBlockPath=Create-BlockFromStage $TarPath $g.Stage $blockPath $method
         $actualName=[System.IO.Path]::GetFileName($actualBlockPath)
         $item=Get-Item -LiteralPath $actualBlockPath
-        $blocks += [ordered]@{id=$id; group=$g.Name; path="blocks/$actualName"; method=$method.Name; compression=$method.Algorithm; fileCount=[int]$g.FileCount; dirCount=[int]$g.DirCount; sourceBytes=[int64]$g.SourceBytes; sizeBytes=[int64]$item.Length; sha256=Get-FileSHA256 $actualBlockPath}
+        $actualMethod = if($actualName.EndsWith(".tar.xz")){"xz9"}else{"store"}
+        $actualCompression = if($actualMethod -eq "xz9"){"xz"}else{"store"}
+        $blocks += [ordered]@{id=$id; group=$g.Name; path="blocks/$actualName"; method=$actualMethod; compression=$actualCompression; fileCount=[int]$g.FileCount; dirCount=[int]$g.DirCount; sourceBytes=[int64]$g.SourceBytes; sizeBytes=[int64]$item.Length; sha256=Get-FileSHA256 $actualBlockPath}
         $index++
     }
     return $blocks
@@ -332,7 +351,7 @@ function Build-Manifest {
         format="STAR"
         formatVersion=1
         tool="SmartTAR"
-        toolVersion="root-preserving-smart-hybrid-v8"
+        toolVersion="SmartTAR STAR 1.0 Beta 1 - Root Preserving Smart Hybrid v8.2"
         createdUtc=(Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
         engine="Windows tar.exe"
         mode=$Mode
@@ -352,7 +371,7 @@ function Get-ArchiveBaseNameWithoutSmartExtension { param([string]$ArchivePath) 
 function Get-ArchiveRootName { param($Manifest,[string]$ArchivePath) $sourceName=[string]$Manifest.sourceName; if(-not(Is-Blank $sourceName)){return $sourceName}; return (Get-ArchiveBaseNameWithoutSmartExtension $ArchivePath) }
 function Test-RelativePathSafe { param([string]$PathText) if(Is-Blank $PathText){return $false}; $path=([string]$PathText).Replace('\','/'); if($path -eq "." -or $path -eq "./"){return $true}; if($path -match '^[a-zA-Z]:'){return $false}; if($path.StartsWith("/") -or $path.StartsWith("//")){return $false}; foreach($part in @($path.Split('/')|Where-Object{-not [string]::IsNullOrWhiteSpace($_) -and $_ -ne "."})){if($part -eq ".."){return $false}}; return $true }
 function Resolve-SafeBlockPath { param([string]$OuterRoot,[string]$RelativeBlockPath) if(-not(Test-RelativePathSafe $RelativeBlockPath)){throw "Unsafe block path in manifest: $RelativeBlockPath"}; return (Join-Path $OuterRoot ($RelativeBlockPath -replace '/', [string][System.IO.Path]::DirectorySeparatorChar)) }
-function Test-ArchiveEntriesSafe { param([string]$TarPath,[string]$ArchivePath) $entries=& $TarPath @("-tf",$ArchivePath) 2>&1; if($LASTEXITCODE -ne 0){$text=($entries|Out-String).Trim(); throw "Cannot list TAR block before extraction: $ArchivePath`r`n$text"}; foreach($entry in $entries){if(-not(Test-RelativePathSafe ([string]$entry))){throw "Unsafe path inside TAR block detected: $entry"}} }
+function Test-ArchiveEntriesSafe { param([string]$TarPath,[string]$ArchivePath) $entries = & $TarPath @("-tf",$ArchivePath) 2>&1; if($LASTEXITCODE -ne 0){$text=($entries|Out-String).Trim(); throw "Cannot list TAR block before extraction: $ArchivePath`r`n$text"}; foreach($entry in $entries){if(-not(Test-RelativePathSafe ([string]$entry))){throw "Unsafe path inside TAR block detected: $entry"}} }
 
 function Copy-DirectoryContents {
     param([string]$SourceRoot,[string]$DestinationRoot)
@@ -428,6 +447,7 @@ function Compress-SmartArchive {
 
 function Extract-SmartArchive {
     param([string]$TarPath,[string]$ArchivePath,[string]$DestinationFolder)
+    if(Is-Blank $ArchivePath){throw "Archive path is empty. Please select an existing .star archive first."}
     if(-not(Test-Path -LiteralPath $TarPath)){throw "tar.exe was not found."}
     if(-not(Test-Path -LiteralPath $ArchivePath)){throw "Archive path does not exist."}
     if(-not(Test-Path -LiteralPath $DestinationFolder)){New-Item -ItemType Directory -Path $DestinationFolder -Force|Out-Null}
@@ -457,7 +477,20 @@ function Extract-SmartArchive {
 
 function Verify-SmartArchive {
     param([string]$TarPath,[string]$ArchivePath)
-    if(-not(Test-Path -LiteralPath $ArchivePath)){throw "Archive path does not exist."}
+
+    if(Is-Blank $ArchivePath){
+        throw "Archive path is empty. Please select an existing .star archive first."
+    }
+    if(Is-Blank $TarPath){
+        throw "tar.exe path is empty."
+    }
+    if(-not(Test-Path -LiteralPath $TarPath)){
+        throw "tar.exe was not found."
+    }
+    if(-not(Test-Path -LiteralPath $ArchivePath)){
+        throw "Archive path does not exist."
+    }
+
     $work=Join-Path $env:TEMP ("smarttar_verify_"+[guid]::NewGuid().ToString("N"))
     $outer=Join-Path $work "outer"
     New-Item -ItemType Directory -Path $outer -Force|Out-Null
@@ -501,14 +534,14 @@ $($lines -join "`r`n")
 function Is-SmartArchivePath { param([string]$Path) if(Is-Blank $Path){return $false}; return ([System.IO.Path]::GetFileName($Path) -match '(?i)(\.star|\.sarc\.tar)$') }
 function Ensure-StarExtension { param([string]$Path) if(Is-Blank $Path){return $Path}; if($Path -match '(?i)(\.star|\.sarc\.tar)$'){return $Path}; return ($Path+".star") }
 function Get-DefaultArchiveBaseName { param([string]$Path,[string]$Type) $clean=Normalize-ArchiveSourcePath $Path; $leaf=Split-Path -Leaf $clean; if(Is-Blank $leaf){return "archive_{0}" -f (Get-Date -Format "yyyyMMdd_HHmmss")}; if($Type -eq "Folder"){return $leaf}; return [System.IO.Path]::GetFileNameWithoutExtension($leaf) }
-function Get-SelectedCompressionMode { $text=[string]$cmbMode.SelectedItem; if($text -like "Solid*"){return "Solid"}; if($text -like "Smart XZ*"){return "SmartXZ"}; if($text -like "Smart*"){return "Smart"}; if($text -like "Store*"){return "Store"}; return "Hybrid" }
+function Get-SelectedCompressionMode { $text=[string]$cmbMode.SelectedItem; if($text -like "Mode - Solid*"){return "Solid"}; if($text -like "Mode - SmartXZ*"){return "SmartXZ"}; if($text -like "Mode - Smart *"){return "Smart"}; return "Hybrid" }
 function Set-DefaultTarget { if(Is-Blank $script:selectedPath){return}; $parent=Split-Path -Parent $script:selectedPath; if(Is-Blank $parent){$parent=$scriptDir}; if($script:selectedType -eq "File" -and (Is-SmartArchivePath $script:selectedPath)){$txtTarget.Text=$parent; return}; $txtTarget.Text=Join-Path $parent ((Get-DefaultArchiveBaseName $script:selectedPath $script:selectedType)+".star") }
 function Set-SelectedPath { param([string]$Path,[ValidateSet("File","Folder")][string]$Type) $script:selectedPath=$Path; $script:selectedType=$Type; $lblSelected.Text="Selected: $script:selectedPath"; if($Type -eq "File"){if(Is-SmartArchivePath $Path){$btnFile.BackColor=$cBg; $btnArchive.BackColor=[System.Drawing.Color]::LightBlue}else{$btnFile.BackColor=[System.Drawing.Color]::LightBlue; $btnArchive.BackColor=$cBg}; $btnFolder.BackColor=$cBg}else{$btnFile.BackColor=$cBg; $btnArchive.BackColor=$cBg; $btnFolder.BackColor=[System.Drawing.Color]::LightBlue}; Set-DefaultTarget }
 
 # ============================================================================
 # 12. GUI construction
 # ============================================================================
-$form=New-UiObject "System.Windows.Forms.Form" @{Text="SmartTAR STAR - Root Preserving Smart Hybrid v8";ClientSize=(New-Size 505 475);StartPosition="CenterScreen";BackColor=$cBg;FormBorderStyle="FixedSingle";MaximizeBox=$false;TopMost=$false}
+$form=New-UiObject "System.Windows.Forms.Form" @{Text="SmartTAR STAR 1.0 Beta 1 - Root Preserving Smart Hybrid v8.2";ClientSize=(New-Size 505 475);StartPosition="CenterScreen";BackColor=$cBg;FormBorderStyle="FixedSingle";MaximizeBox=$false;TopMost=$false}
 $lblInput=New-EcoLabel "1. Select input file or folder:" 20 20 -Font $fBold
 $btnFile=New-EcoButton "Add FILE" 20 48 150 30
 $btnFolder=New-EcoButton "Add FOLDER" 177 48 150 30
@@ -519,11 +552,10 @@ $txtTarget=New-UiObject "System.Windows.Forms.TextBox" @{Location=(New-Point 20 
 $btnTarget=New-EcoButton "..." 422 152 63 24
 $lblMode=New-EcoLabel "3. Compression mode:" 20 195 -Font $fBold
 $cmbMode=New-UiObject "System.Windows.Forms.ComboBox" @{Location=(New-Point 20 223);Size=(New-Size 465 24);Font=$fNormal;DropDownStyle=[System.Windows.Forms.ComboBoxStyle]::DropDownList}
-[void]$cmbMode.Items.Add("Hybrid - recommended, smart grouped root-preserving blocks")
-[void]$cmbMode.Items.Add("Smart - detailed grouped root-preserving blocks")
-[void]$cmbMode.Items.Add("Smart XZ - all non-stored groups use XZ9")
-[void]$cmbMode.Items.Add("Solid - one root-preserving XZ9 block")
-[void]$cmbMode.Items.Add("Store - root-preserving no compression")
+[void]$cmbMode.Items.Add("Mode - Hybrid - recommended")
+[void]$cmbMode.Items.Add("Mode - Smart - grouped blocks")
+[void]$cmbMode.Items.Add("Mode - SmartXZ - grouped XZ blocks")
+[void]$cmbMode.Items.Add("Mode - Solid - one compressed block")
 $cmbMode.SelectedIndex=0
 $lblInfo=New-EcoLabel "Every block contains the selected root prefix. No folder-name deduplication." 20 252 465 20 $fItalic ([System.Drawing.Color]::DimGray)
 $btnCompress=New-EcoButton "COMPRESS" 20 287 150 42 $fBold ([System.Drawing.Color]::SeaGreen) ([System.Drawing.Color]::White)
@@ -537,6 +569,18 @@ $form.Controls.AddRange([System.Windows.Forms.Control[]]@($lblInput,$btnFile,$bt
 # ============================================================================
 # 13. GUI events
 # ============================================================================
+$cmbMode.Add_SelectedIndexChanged({
+    $mode = Get-SelectedCompressionMode
+    if($mode -eq "Solid"){
+        $lblInfo.Text = "Solid creates one compressed root-preserving block."
+    } elseif($mode -eq "SmartXZ"){
+        $lblInfo.Text = "SmartXZ creates grouped XZ blocks and STORE blocks for already-compressed data."
+    } elseif($mode -eq "Smart"){
+        $lblInfo.Text = "Smart creates detailed grouped root-preserving blocks."
+    } else {
+        $lblInfo.Text = "Hybrid is recommended. Every block contains the selected root prefix."
+    }
+})
 $btnFile.Add_Click({$dialog=New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title="Select file"; $dialog.Filter="All files (*.*)|*.*"; try{if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){Set-SelectedPath $dialog.FileName "File"}}finally{$dialog.Dispose()}})
 $btnFolder.Add_Click({$dialog=New-Object System.Windows.Forms.FolderBrowserDialog; $dialog.Description="Select folder to archive"; try{if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){Set-SelectedPath (Normalize-ArchiveSourcePath $dialog.SelectedPath) "Folder"}}finally{$dialog.Dispose()}})
 $btnArchive.Add_Click({$dialog=New-Object System.Windows.Forms.OpenFileDialog; $dialog.Title="Select SmartTAR archive"; $dialog.Filter="SmartTAR Archive (*.star)|*.star|Legacy SmartTAR Archive (*.sarc.tar)|*.sarc.tar|All files (*.*)|*.*"; try{if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){Set-SelectedPath $dialog.FileName "File"}}finally{$dialog.Dispose()}})
@@ -576,7 +620,27 @@ function Execute-Extract {
 }
 
 function Execute-Verify {
-    if(Is-Blank $script:selectedPath -or $script:selectedType -ne "File" -or -not(Test-Path -LiteralPath $script:selectedPath)){Msg "Please select an existing .star archive." "Invalid Archive" ([System.Windows.Forms.MessageBoxIcon]::Warning)|Out-Null; return}
+    if(Is-Blank $script:selectedPath){
+        Msg "Please select an existing .star archive first." "Invalid Archive" ([System.Windows.Forms.MessageBoxIcon]::Warning)|Out-Null
+        Set-AppStatus "Verification cancelled. No archive selected." ([System.Drawing.Color]::DimGray)
+        return
+    }
+    if($script:selectedType -ne "File"){
+        Msg "Verification input must be a .star archive file." "Invalid Archive" ([System.Windows.Forms.MessageBoxIcon]::Warning)|Out-Null
+        Set-AppStatus "Verification cancelled. Invalid input type." ([System.Drawing.Color]::DimGray)
+        return
+    }
+    if(-not(Test-Path -LiteralPath $script:selectedPath)){
+        Msg "Selected archive does not exist." "Invalid Archive" ([System.Windows.Forms.MessageBoxIcon]::Warning)|Out-Null
+        Set-AppStatus "Verification cancelled. Archive does not exist." ([System.Drawing.Color]::DimGray)
+        return
+    }
+    if(-not(Is-SmartArchivePath $script:selectedPath)){
+        Msg "Please select a .star archive." "Invalid Archive" ([System.Windows.Forms.MessageBoxIcon]::Warning)|Out-Null
+        Set-AppStatus "Verification cancelled. Not a .star archive." ([System.Drawing.Color]::DimGray)
+        return
+    }
+
     Start-UiWork; $success=$false; $summary=$null; $errorMessage=$null
     try{$summary=Verify-SmartArchive $tarPath $script:selectedPath; $success=$true}catch{$errorMessage=Get-ErrorDetails $_}finally{Stop-UiWork}
     $reportPath=Get-ReportPath $script:selectedPath "verify_report"
