@@ -581,9 +581,24 @@ function Convert-ToTarListPath {
 }
 
 function Get-SortedSourceFiles {
-    param($SourceItem,[string]$Source,[string]$BaseRoot="")
+    param(
+        $SourceItem,
+        [string]$Source,
+        [string]$BaseRoot = ""
+    )
 
-    if(-not $SourceItem.PSIsContainer){ return @($SourceItem) }
+    if(-not $SourceItem.PSIsContainer){
+        return @($SourceItem)
+    }
+
+    if(Is-Blank $BaseRoot){
+        return @(
+            Get-ChildItem -LiteralPath $Source -File -Recurse -Force -ErrorAction SilentlyContinue |
+                Sort-Object `
+                    @{Expression={$_.FullName.ToLowerInvariant()}},
+                    @{Expression={$_.FullName}}
+        )
+    }
 
     return @(
         Get-ChildItem -LiteralPath $Source -File -Recurse -Force -ErrorAction SilentlyContinue |
