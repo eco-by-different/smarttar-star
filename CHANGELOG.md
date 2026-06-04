@@ -1,38 +1,34 @@
 # Changelog
 
-## 1.0 Beta 1 Fix 4
+All notable changes to this project should be documented in this file.
 
-Recommended GitHub / EXE version.
+This project uses a practical beta versioning style until the archive format becomes stable.
+
+---
+
+## v0.1.0-beta - Initial public beta
 
 ### Added
 
-- Safe extraction through local `_smarttar_tmp`.
-- Automatic cleanup of temporary working folders.
-- Removal of the `_smarttar_tmp` root folder when it is empty.
-- Default extraction target is now the archive parent folder.
-- Overwrite / merge Yes-No dialog when the extracted root already exists.
-- Manifest preview before extraction to determine `sourceName`.
+- Initial public GitHub package structure.
+- PowerShell WinForms GUI archiver concept.
+- `.star` archive extension.
+- Legacy `.sarc.tar` recognition.
+- Outer TAR container with internal block layout.
+- `manifest.json` metadata.
+- SHA-256 hash verification for internal blocks.
+- TAR capability detection.
+- Compression modes:
+  - Hybrid,
+  - Smart,
+  - Solid,
+  - Smart XZ.
+- XZ/XZ9 timestamp stabilization for XZ-related block stages.
+- Create, extract, and verify reports.
+- Extraction path safety checks.
 
-### Changed
+### Notes
 
-- The default extraction target is no longer `*_extracted`.
-- An archive containing folder `A` is extracted as:
-
-```text
-<selected target folder>\A\...
-```
-
-### Fixed
-
-- Fixed `tar.exe` permission errors when extracting directly to Desktop, protected folders, or localized paths.
-- Reduced Windows `tar.exe` issues with mapped drives and localized paths by using local staging.
-
-## 1.0 Beta 1 Fix 3
-
-- Added safe extraction through `_smarttar_tmp`.
-- PowerShell copies extracted results into the final destination folder.
-
-## 1.0 Beta 1 Fix 2
-
-- XZ9 / XZStable clean version.
-- XZ/XZ9 blocks use timestamp stabilization.
+- This is a beta / experimental release.
+- The `.star` archive format may change before a stable release.
+- Use independent backups for critical data.
