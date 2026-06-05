@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<XML_DIZ_INFO>
+  <MASTER_PAD_VERSION_INFO>
+    <MASTER_PAD_VERSION>3.11</MASTER_PAD_VERSION>
+    <MASTER_PAD_INFO>Portable Application Description file for software directory submission.</MASTER_PAD_INFO>
+  </MASTER_PAD_VERSION_INFO>
+
+  <Company_Info>
+    <Company_Name>eco-by-different</Company_Name>
+    <Address_1></Address_1>
+    <Address_2></Address_2>
+    <City_Town></City_Town>
+    <State_Province></State_Province>
+    <Zip_Postal_Code></Zip_Postal_Code>
+    <Country>Czech Republic</Country>
+    <Company_WebSite_URL>https://github.com/eco-by-different</Company_WebSite_URL>
+    <Contact_Info>
+      <Author_First_Name>Jan</Author_First_Name>
+      <Author_Last_Name>Simak</Author_Last_Name>
+      <Author_Email>CHANGE_ME@example.com</Author_Email>
+      <Contact_First_Name>Jan</Contact_First_Name>
+      <Contact_Last_Name>Simak</Contact_Last_Name>
+      <Contact_Email>differentchange@seznam.cz</Contact_Email>
+    </Contact_Info>
+  </Company_Info>
+
+  <Program_Info>
+    <Program_Name>SmartTAR - STAR</Program_Name>
+    <Program_Version>SmartTAR - STAR 1.0 Beta 1 RC3</Program_Version>
+    <Program_Release_Month>6</Program_Release_Month>
+    <Program_Release_Day>5</Program_Release_Day>
+    <Program_Release_Year>2026</Program_Release_Year>
+    <Program_Cost_Dollars>0</Program_Cost_Dollars>
+    <Program_Cost_Other_Code></Program_Cost_Other_Code>
+    <Program_Cost_Other></Program_Cost_Other>
+    <Program_Type>MIT</Program_Type>
+    <Program_Release_Status>Alpha</Program_Release_Status>
+    <Program_Install_Support>No Install Support</Program_Install_Support>
+    <Program_OS_Support>Windows 10, Windows 11</Program_OS_Support>
+    <Program_Language>English</Program_Language>
+    <Program_Change_Info>Initial public PAD draft for SmartTAR STAR. Update version, release notes and direct download URL before submission.</Program_Change_Info>
+    <Program_Specific_Category>System Utilities::File Compression</Program_Specific_Category>
+    <Program_Category_Class>Utilities</Program_Category_Class>
+  </Program_Info>
+
+  <Program_Descriptions>
+    <English>
+      <Keywords>archive,compression,tar,zstd,powershell,windows,sha256,backup,gui,utility</Keywords>
+      <Char_Desc_45>PowerShell GUI archiver for Windows</Char_Desc_45>
+      <Char_Desc_80>Experimental Windows PowerShell GUI archiver using transparent STAR containers.</Char_Desc_80>
+      <Char_Desc_250>SmartTAR STAR is an experimental Windows PowerShell GUI archiver using tar.exe, transparent .star archive containers, block manifests, SHA-256 verification and recovery-friendly archive design.</Char_Desc_250>
+      <Char_Desc_450>SmartTAR STAR is an experimental Windows PowerShell GUI archiver focused on practical archive creation, verification and recovery-friendly workflows. It uses Windows tar.exe, transparent .star archive containers, block manifest metadata, SHA-256 verification and smart compression planning with Hybrid, Smart, Solid and Smart XZ modes.</Char_Desc_450>
+      <Char_Desc_2000>SmartTAR STAR is an experimental Windows PowerShell GUI archiver from the eco-by-different project. It is designed for users who want transparent archive containers, practical verification and recovery-friendly compression workflows on Windows. The project uses Windows tar.exe and focuses on .star archive containers, block manifest metadata, SHA-256 verification and smart compression planning. Supported planning modes include Hybrid, Smart, Solid and Smart XZ. The project is part of a broader collection of Windows utilities focused on system performance, efficient encoding, compression workflows and system-level tuning.</Char_Desc_2000>
+    </English>
+  </Program_Descriptions>
+
+  <Web_Info>
+    <Application_URLs>
+      <Application_Info_URL>https://github.com/eco-by-different/smarttar-star</Application_Info_URL>
+      <Application_Order_URL>https://github.com/eco-by-different/smarttar-star</Application_Order_URL>
+      <Application_Screenshot_URL>https://github.com/eco-by-different/smarttar-star/raw/main/assets/screenshot.png</Application_Screenshot_URL>
+      <Application_Icon_URL>https://github.com/eco-by-different/smarttar-star/raw/main/assets/icon.png</Application_Icon_URL>
+      <Application_XML_File_URL>https://github.com/eco-by-different/smarttar-star/raw/main/smarttar-star-pad.xml</Application_XML_File_URL>
+    </Application_URLs>
+    <Download_URLs>
+      <Primary_Download_URL>https://github.com/eco-by-different/smarttar-star/releases/latest</Primary_Download_URL>
+      <Secondary_Download_URL>https://github.com/eco-by-different/smarttar-star</Secondary_Download_URL>
+      <Additional_Download_URL_1>https://github.com/eco-by-different</Additional_Download_URL_1>
+      <Additional_Download_URL_2></Additional_Download_URL_2>
+    </Download_URLs>
+  </Web_Info>
+
+  <Permissions>
+    <Distribution_Permissions>Distribution is permitted provided that the original package is not modified and the official project URL is preserved.</Distribution_Permissions>
+    <EULA>See the license file in the GitHub repository.</EULA>
+  </Permissions>
+
+  <ASP>
+    <ASP_FORM>False</ASP_FORM>
+    <ASP_Member_Number></ASP_Member_Number>
+  </ASP>
+</XML_DIZ_INFO>
