@@ -76,6 +76,11 @@ function Convert-ToTarPath {
     return ([string]$Path).Replace([char]92,[char]47)
 }
 
+function Convert-ToLocalPath {
+    param([string]$Path)
+    return ([string]$Path).Replace([char]47,[System.IO.Path]::DirectorySeparatorChar)
+}
+
 function Normalize-ArchiveSourcePath {
     param([string]$Path)
     if(Test-Blank $Path){ return "" }
@@ -112,6 +117,7 @@ function Format-Bytes {
 
 function Get-ErrorDetails {
     param($ErrorRecord)
+
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add("Message:") | Out-Null
     $lines.Add([string]$ErrorRecord.Exception.Message) | Out-Null
@@ -158,10 +164,13 @@ function Get-SourceSize {
 
 function Get-ReportPath {
     param([string]$BasePath,[string]$Kind)
+
     $dir = [System.IO.Path]::GetDirectoryName($BasePath)
     if(Test-Blank $dir){ $dir = (Get-Location).Path }
+
     $name = [System.IO.Path]::GetFileName($BasePath)
     if(Test-Blank $name){ $name = "SmartTAR" }
+
     return (Join-Path $dir ("$name.$Kind.$(Get-Date -Format yyyyMMdd_HHmmss).txt"))
 }
 
@@ -173,6 +182,53 @@ function Write-ReportFile {
     } catch {
         return $false
     }
+}
+
+function New-SafeWorkRoot {
+    param([string]$Purpose,[string]$PreferredPath)
+
+    $guid = [guid]::NewGuid().ToString("N")
+    $safePurpose = if(Test-Blank $Purpose){ "work" }else{ $Purpose }
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    try {
+        $preferredFull = [System.IO.Path]::GetFullPath($PreferredPath)
+        $preferredDrive = [System.IO.Path]::GetPathRoot($preferredFull)
+
+        if(-not(Test-Blank $preferredDrive)){
+            if($preferredDrive -ieq "C:\" -and -not(Test-Blank $env:PUBLIC)){
+                [void]$candidates.Add((Join-Path $env:PUBLIC "SmartTAR_Temp"))
+            }
+
+            [void]$candidates.Add((Join-Path $preferredDrive "SmartTAR_Temp"))
+        }
+    } catch {}
+
+    if(-not(Test-Blank $env:PUBLIC)){
+        [void]$candidates.Add((Join-Path $env:PUBLIC "SmartTAR_Temp"))
+    }
+
+    if(-not(Test-Blank $env:TEMP)){
+        [void]$candidates.Add((Join-Path $env:TEMP "SmartTAR_Temp"))
+    }
+
+    foreach($base in $candidates){
+        try {
+            if(Test-Blank $base){ continue }
+            New-Item -ItemType Directory -Path $base -Force -ErrorAction Stop | Out-Null
+            $testFile = Join-Path $base ("write_test_" + [guid]::NewGuid().ToString("N") + ".tmp")
+            "test" | Set-Content -LiteralPath $testFile -Encoding ASCII -ErrorAction Stop
+            Remove-Item -LiteralPath $testFile -Force -ErrorAction SilentlyContinue
+
+            $work = Join-Path $base ("smarttar_{0}_{1}" -f $safePurpose,$guid)
+            New-Item -ItemType Directory -Path $work -Force -ErrorAction Stop | Out-Null
+            return $work
+        } catch {
+            continue
+        }
+    }
+
+    throw "Unable to create a writable SmartTAR work folder."
 }
 
 # ============================================================================
@@ -271,7 +327,7 @@ function New-EcoCheck {
 function Show-Message {
     param(
         [string]$Message,
-        [string]$Title = "SmartTAR STAR Fix 12 RC3",
+        [string]$Title = "SmartTAR STAR Fix 12 RC6",
         [System.Windows.Forms.MessageBoxIcon]$Icon = [System.Windows.Forms.MessageBoxIcon]::Information,
         [System.Windows.Forms.MessageBoxButtons]$Buttons = [System.Windows.Forms.MessageBoxButtons]::OK
     )
@@ -323,14 +379,17 @@ function Get-TarMethodByName {
 
 function Invoke-TarRaw {
     param([string]$TarPath,$TarArgs)
+
     $args = @()
     foreach($arg in @($TarArgs)){ $args += [string]$arg }
+
     $output = & $TarPath @args 2>&1
     return @{ExitCode=$LASTEXITCODE; Output=($output | Out-String).Trim()}
 }
 
 function Invoke-Tar {
     param([string]$TarPath,$TarArgs,[string]$FailMessage)
+
     $result = Invoke-TarRaw $TarPath $TarArgs
     if([int]$result.ExitCode -ne 0){
         $text = [string]$result.Output
@@ -346,15 +405,16 @@ function Invoke-TarList {
 }
 
 function Test-TarCapabilities {
-    param([string]$TarPath)
+    param([string]$TarPath,[string]$SafeWork)
 
-    $root = Join-Path $env:TEMP ("smarttar_cap_" + [guid]::NewGuid().ToString("N"))
+    $root = Join-Path $SafeWork ("cap_" + [guid]::NewGuid().ToString("N"))
     $sample = Join-Path $root "sample"
     $extract = Join-Path $root "extract"
     New-Item -ItemType Directory -Path $sample,$extract -Force | Out-Null
     "test" | Set-Content -LiteralPath (Join-Path $sample "sample.txt") -Encoding UTF8
 
     $capabilities = @{}
+
     foreach($method in Get-TarMethods){
         $name = [string]$method.Name
         $archive = Join-Path $root ("test" + $method.Extension)
@@ -370,12 +430,14 @@ function Test-TarCapabilities {
 
         $create = Invoke-TarRaw $TarPath $args
         $ok = $false
+
         if([int]$create.ExitCode -eq 0 -and (Test-Path -LiteralPath $archive)){
             $extractResult = Invoke-TarRaw $TarPath @("-xf",$archive,"-C",$extractDir)
             if([int]$extractResult.ExitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $extractDir "sample.txt"))){
                 $ok = $true
             }
         }
+
         $capabilities[$name] = $ok
     }
 
@@ -415,6 +477,7 @@ function Select-StoreMethod {
 # ============================================================================
 function Get-SmartGroupName {
     param([string]$FilePath)
+
     $ext = [System.IO.Path]::GetExtension($FilePath).ToLowerInvariant()
 
     $textExt    = @(".txt",".csv",".json",".xml",".log",".ini",".cfg",".md",".sql",".ps1",".bat",".cmd",".html",".htm",".css",".js",".ts",".yml",".yaml",".toml",".reg",".inf",".srt",".vtt")
@@ -481,17 +544,21 @@ function Get-SourceProfile {
         $profile[$group] = [int64]$profile[$group] + [int64]$file.Length
         $profile.files++
     }
+
     return $profile
 }
 
 function Select-AutoSolidMethod {
     param([hashtable]$Capabilities,[hashtable]$Profile)
+
     $zstd = Select-ZstdOrBest $Capabilities
     $xz = Select-XzOrBest $Capabilities
+
     if($Capabilities.ContainsKey("zstd19") -and $Capabilities["zstd19"]){
         $binaryLike = [int64]$Profile.binary + [int64]$Profile.executable + [int64]$Profile.diskimage
         if($binaryLike -gt [int64]$Profile.text){ return $zstd }
     }
+
     return $xz
 }
 
@@ -544,11 +611,12 @@ function New-ArchiveGroups {
             $groups.stored       = New-GroupInfo stored       $store "Media and archive-like data is stored."
         }
     }
+
     return $groups
 }
 
 # ============================================================================
-# 06. Chunked argument creation model
+# 06. Safe chunk staging and block creation
 # ============================================================================
 function Add-FileToGroup {
     param([hashtable]$Group,[string]$SourcePath,[string]$RelativePath,[int64]$Bytes)
@@ -572,9 +640,11 @@ function Stage-FilesPlan {
     foreach($file in (Get-SortedSourceFiles $SourceItem $Source $BaseRoot)){
         $smartGroup = Get-SmartGroupName $file.FullName
         $groupName = Get-ModeGroupName $Mode $smartGroup
+
         if(-not $Groups.Contains($groupName)){
             throw "Internal grouping error. Group '$groupName' does not exist for mode '$Mode'."
         }
+
         $relativePath = Get-RelativePathFromBase $BaseRoot $file.FullName
         Add-FileToGroup $Groups[$groupName] $file.FullName $relativePath ([int64]$file.Length)
     }
@@ -587,7 +657,7 @@ function Create-StructureStage {
     if(-not $SourceItem.PSIsContainer){ return $count }
 
     $rootRelative = Get-RelativePathFromBase $BaseRoot $Source
-    New-Item -ItemType Directory -Path (Join-Path $StageRoot $rootRelative) -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $StageRoot (Convert-ToLocalPath $rootRelative)) -Force | Out-Null
     $count++
 
     $directories = @(
@@ -597,9 +667,10 @@ function Create-StructureStage {
 
     foreach($directory in $directories){
         $relativePath = Get-RelativePathFromBase $BaseRoot $directory.FullName
-        New-Item -ItemType Directory -Path (Join-Path $StageRoot $relativePath) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $StageRoot (Convert-ToLocalPath $relativePath)) -Force | Out-Null
         $count++
     }
+
     return $count
 }
 
@@ -614,6 +685,7 @@ function Split-FileChunks {
 
     foreach($file in $Files){
         if($null -eq $file){ continue }
+
         $relativePath = [string]$file.Rel
         $additionalChars = $relativePath.Length + 3
 
@@ -630,33 +702,63 @@ function Split-FileChunks {
     if($current.Count -gt 0){
         [void]$chunks.Add([pscustomobject]@{ Files=[object[]]$current.ToArray(); Count=[int]$current.Count })
     }
+
     return ,$chunks
 }
 
-function Create-BlockFromArgs {
-    param([string]$TarPath,[string]$SourceParent,[string]$BlockPath,[hashtable]$Method,$ChunkFiles)
+function New-ChunkHardlinkStage {
+    param([string]$WorkRoot,$ChunkFiles)
 
-    $args = @()
-    $args += $Method.CreateArgs
-    $args += $BlockPath
-    $args += "-C"
-    $args += $SourceParent
+    $stageRoot = Join-Path $WorkRoot ("argstage_" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
 
     foreach($file in @($ChunkFiles)){
-        if($null -ne $file){ $args += [string]$file.Rel }
+        if($null -eq $file){ continue }
+
+        $relTar = Convert-ToTarPath ([string]$file.Rel)
+        if(Test-Blank $relTar){ throw "Empty relative path in chunk." }
+        if($relTar.StartsWith("/") -or $relTar -match '^[a-zA-Z]:'){ throw "Relative path expected, got: $relTar" }
+
+        $relLocal = Convert-ToLocalPath $relTar
+        $linkPath = Join-Path $stageRoot $relLocal
+        $linkDir = Split-Path -Parent $linkPath
+        if(-not(Test-Path -LiteralPath $linkDir)){ New-Item -ItemType Directory -Path $linkDir -Force | Out-Null }
+
+        if(Test-Path -LiteralPath $linkPath){ Remove-Item -LiteralPath $linkPath -Force -ErrorAction SilentlyContinue }
+
+        try {
+            New-Item -ItemType HardLink -Path $linkPath -Target ([string]$file.Path) -ErrorAction Stop | Out-Null
+        } catch {
+            Copy-Item -LiteralPath ([string]$file.Path) -Destination $linkPath -Force -ErrorAction Stop
+        }
     }
-    Invoke-Tar $TarPath $args "Block creation from chunked arguments failed: $BlockPath."
+
+    return $stageRoot
 }
 
 function Create-BlockFromStage {
-    param([string]$TarPath,[string]$StagePath,[string]$BlockPath,[hashtable]$Method)
-    $args = @()
-    $args += $Method.CreateArgs
-    $args += $BlockPath
-    $args += "-C"
-    $args += $StagePath
-    $args += "."
-    Invoke-Tar $TarPath $args "Structure block creation failed: $BlockPath."
+    param([string]$TarPath,[string]$StagePath,[string]$BlockPath,[hashtable]$Method,$RelativePaths)
+
+    Push-Location -LiteralPath $StagePath
+    try {
+        $args = @()
+        $args += $Method.CreateArgs
+        $args += $BlockPath
+
+        if($null -eq $RelativePaths){
+            $args += "."
+        }else{
+            foreach($rel in @($RelativePaths)){
+                $safeRel = Convert-ToTarPath ([string]$rel)
+                if($safeRel.StartsWith("-")){ $safeRel = "./$safeRel" }
+                $args += $safeRel
+            }
+        }
+
+        Invoke-Tar $TarPath $args "Block creation failed: $BlockPath."
+    } finally {
+        Pop-Location
+    }
 }
 
 function Add-BlockManifestItem {
@@ -664,6 +766,7 @@ function Add-BlockManifestItem {
 
     $item = Get-Item -LiteralPath $BlockPath
     $name = [System.IO.Path]::GetFileName($BlockPath)
+
     $List.Value += [ordered]@{
         id          = $BlockId
         group       = $GroupName
@@ -685,7 +788,7 @@ function Add-BlockManifestItem {
 }
 
 function Build-Blocks {
-    param([string]$TarPath,[hashtable]$Groups,[string]$BlocksDir,[string]$SourceParent,[string]$StructureStage,[int]$StructureDirCount,[hashtable]$StoreMethod)
+    param([string]$TarPath,[hashtable]$Groups,[string]$BlocksDir,[string]$WorkRoot,[string]$StructureStage,[int]$StructureDirCount,[hashtable]$StoreMethod)
 
     $blocks = @()
     $index = 1
@@ -693,8 +796,9 @@ function Build-Blocks {
     if($StructureDirCount -gt 0){
         $id = "{0:D6}" -f $index
         $blockPath = Join-Path $BlocksDir ("$id`_structure.tar")
+
         Set-AppStatus "Creating block $id structure..." ([System.Drawing.Color]::DarkOrange)
-        Create-BlockFromStage $TarPath $StructureStage $blockPath $StoreMethod
+        Create-BlockFromStage $TarPath $StructureStage $blockPath $StoreMethod $null
         Add-BlockManifestItem ([ref]$blocks) $id "structure" $blockPath $StoreMethod "Directory structure only." 0 $StructureDirCount 0
         $index++
     }
@@ -705,6 +809,7 @@ function Build-Blocks {
 
         $chunks = Split-FileChunks -Files $group.Files
         $part = 1
+
         foreach($chunkInfo in $chunks){
             $chunkFiles = @($chunkInfo.Files)
             if($chunkFiles.Count -lt 1){ continue }
@@ -714,16 +819,29 @@ function Build-Blocks {
             $safeGroup = [string]$group.Name + $suffix
             $blockPath = Join-Path $BlocksDir ("$id`_$safeGroup$($group.Method.Extension)")
 
-            Set-AppStatus "Creating block $id $safeGroup..." ([System.Drawing.Color]::DarkOrange)
-            Create-BlockFromArgs $TarPath $SourceParent $blockPath $group.Method $chunkFiles
+            $stageRoot = $null
+            try {
+                Set-AppStatus "Creating safe stage for block $id..." ([System.Drawing.Color]::DarkOrange)
+                $stageRoot = New-ChunkHardlinkStage $WorkRoot $chunkFiles
+
+                $relativePaths = @($chunkFiles | ForEach-Object { [string]$_.Rel })
+                Set-AppStatus "Creating block $id $safeGroup..." ([System.Drawing.Color]::DarkOrange)
+                Create-BlockFromStage $TarPath $stageRoot $blockPath $group.Method $relativePaths
+            } finally {
+                if($stageRoot -and (Test-Path -LiteralPath $stageRoot)){
+                    Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
 
             $sourceBytes = [int64]0
             foreach($file in $chunkFiles){ $sourceBytes += [int64]$file.Bytes }
+
             Add-BlockManifestItem ([ref]$blocks) $id $safeGroup $blockPath $group.Method ([string]$group.Reason) ([int]$chunkFiles.Count) 0 $sourceBytes
             $index++
             $part++
         }
     }
+
     return $blocks
 }
 
@@ -734,21 +852,22 @@ function Write-Manifest {
 
 function Build-Manifest {
     param([string]$Source,$SourceItem,[string]$SourceLeaf,[string]$Mode,[hashtable]$Capabilities,[hashtable]$Profile,$Blocks)
+
     return [ordered]@{
         format          = "STAR"
         formatVersion   = 1
         tool            = "SmartTAR"
-        toolVersion     = "1.0-beta1-fix12-rc3-readable-salvagemode"
+        toolVersion     = "1.0-beta1-fix12-rc6-safe-path-build"
         createdUtc      = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
         engine          = "Windows tar.exe"
-        model           = "root-preserving-chunkedargs-readable-fix12-rc3"
+        model           = "safe-workroot-hardlink-stage-fix12-rc6"
         compressionMode = $Mode
         sourceName      = $SourceLeaf
         sourceType      = if($SourceItem.PSIsContainer){"Folder"}else{"File"}
         sourceBytes     = Get-SourceSize $Source
-        rootRule        = "No deduplication. File blocks are chunked arguments; structure block stores directories only."
-        creationMode    = "chunked-arguments-no-filelist-folder-only-structure-stage"
-        planning        = [ordered]@{ strategy="chunked-arguments"; chunkMaxEntries=96; chunkMaxChars=22000; xzMaxLevel=9; zstdMaxLevel=19 }
+        rootRule        = "Root-preserving. File blocks are created from safe hardlink stages."
+        creationMode    = "safe-workroot-hardlink-stage-no-filelist"
+        planning        = [ordered]@{ strategy="safe-path-chunked-arguments"; chunkMaxEntries=96; chunkMaxChars=22000; xzMaxLevel=9; zstdMaxLevel=19 }
         capabilities    = [ordered]@{ store=[bool]$Capabilities.store; gzip=[bool]$Capabilities.gzip; bzip2=[bool]$Capabilities.bzip2; xz9=[bool]$Capabilities.xz9; xz=[bool]$Capabilities.xz; zstd19=[bool]$Capabilities.zstd19 }
         sourceProfile   = $Profile
         blocks          = @($Blocks)
@@ -760,38 +879,47 @@ function Build-Manifest {
 # ============================================================================
 function Read-OuterManifest {
     param([string]$OuterRoot)
+
     $manifestPath = Join-Path $OuterRoot "manifest.json"
     if(-not(Test-Path -LiteralPath $manifestPath)){ throw "manifest.json was not found." }
+
     $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if($manifest.format -ne "STAR" -and $manifest.format -ne "SARC" -and $manifest.format -ne "SmartTarArc"){
         throw "Invalid archive format."
     }
+
     return $manifest
 }
 
 function Test-RelativePathSafe {
     param([string]$PathText)
+
     if(Test-Blank $PathText){ return $false }
+
     $path = Convert-ToTarPath $PathText
     if($path -eq "." -or $path -eq "./"){ return $true }
     if($path -match '^[a-zA-Z]:'){ return $false }
     if($path.StartsWith("/") -or $path.StartsWith("//")){ return $false }
+
     foreach($part in @($path.Split('/') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne "." })){
         if($part -eq ".."){ return $false }
     }
+
     return $true
 }
 
 function Resolve-SafeBlockPath {
     param([string]$OuterRoot,[string]$RelativeBlockPath)
     if(-not(Test-RelativePathSafe $RelativeBlockPath)){ throw "Unsafe block path: $RelativeBlockPath" }
-    return (Join-Path $OuterRoot ($RelativeBlockPath -replace '/', [string][System.IO.Path]::DirectorySeparatorChar))
+    return (Join-Path $OuterRoot (Convert-ToLocalPath $RelativeBlockPath))
 }
 
 function Test-ArchiveEntriesSafe {
     param([string]$TarPath,[string]$ArchivePath)
+
     $result = Invoke-TarRaw $TarPath @("-tf",$ArchivePath)
     if([int]$result.ExitCode -ne 0){ throw "Cannot list TAR block: $ArchivePath`r`n$($result.Output)" }
+
     foreach($entry in @(([string]$result.Output) -split "`r?`n")){
         if(-not(Test-Blank $entry)){
             if(-not(Test-RelativePathSafe $entry)){ throw "Unsafe path inside TAR block: $entry" }
@@ -801,6 +929,7 @@ function Test-ArchiveEntriesSafe {
 
 function Get-ArchiveBaseNameWithoutSmartExtension {
     param([string]$ArchivePath)
+
     $name = [System.IO.Path]::GetFileName($ArchivePath)
     if($name -match '^(.*)\.sarc\.tar$'){ return $matches[1] }
     if($name -match '^(.*)\.star$'){ return $matches[1] }
@@ -809,6 +938,7 @@ function Get-ArchiveBaseNameWithoutSmartExtension {
 
 function Get-ArchiveRootName {
     param($Manifest,[string]$ArchivePath)
+
     $sourceName = [string]$Manifest.sourceName
     if(-not(Test-Blank $sourceName)){ return $sourceName }
     return (Get-ArchiveBaseNameWithoutSmartExtension $ArchivePath)
@@ -816,10 +946,13 @@ function Get-ArchiveRootName {
 
 function Copy-DirectoryContents {
     param([string]$SourceRoot,[string]$DestinationRoot)
+
     if(-not(Test-Path -LiteralPath $SourceRoot)){ return }
     if(-not(Test-Path -LiteralPath $DestinationRoot)){ New-Item -ItemType Directory -Path $DestinationRoot -Force | Out-Null }
+
     Get-ChildItem -LiteralPath $SourceRoot -Force -ErrorAction SilentlyContinue | ForEach-Object {
         $target = Join-Path $DestinationRoot $_.Name
+
         if($_.PSIsContainer){
             if(-not(Test-Path -LiteralPath $target)){ New-Item -ItemType Directory -Path $target -Force | Out-Null }
             Copy-DirectoryContents $_.FullName $target
@@ -833,57 +966,94 @@ function Copy-DirectoryContents {
 
 function Copy-PayloadToFinalDestination {
     param($Manifest,[string]$PayloadRoot,[string]$DestinationParent,[string]$ArchivePath)
+
     $rootName = Get-ArchiveRootName $Manifest $ArchivePath
     $sourceType = [string]$Manifest.sourceType
+
     if($sourceType -eq "Folder" -and -not(Test-Blank $rootName)){
         $finalRoot = Join-Path $DestinationParent $rootName
         if(-not(Test-Path -LiteralPath $finalRoot)){ New-Item -ItemType Directory -Path $finalRoot -Force | Out-Null }
+
         $rootInPayload = Join-Path $PayloadRoot $rootName
-        if(Test-Path -LiteralPath $rootInPayload){ Copy-DirectoryContents $rootInPayload $finalRoot }else{ Copy-DirectoryContents $PayloadRoot $finalRoot }
+        if(Test-Path -LiteralPath $rootInPayload){
+            Copy-DirectoryContents $rootInPayload $finalRoot
+        }else{
+            Copy-DirectoryContents $PayloadRoot $finalRoot
+        }
         return
     }
+
     Copy-DirectoryContents $PayloadRoot $DestinationParent
+}
+
+function Prepare-SafeArchiveInput {
+    param([string]$ArchivePath,[string]$WorkRoot)
+
+    $safeArchive = Join-Path $WorkRoot "input.star"
+    if(Test-Path -LiteralPath $safeArchive){ Remove-Item -LiteralPath $safeArchive -Force -ErrorAction SilentlyContinue }
+
+    try {
+        New-Item -ItemType HardLink -Path $safeArchive -Target $ArchivePath -ErrorAction Stop | Out-Null
+    } catch {
+        Copy-Item -LiteralPath $ArchivePath -Destination $safeArchive -Force -ErrorAction Stop
+    }
+
+    return $safeArchive
 }
 
 function Extract-Blocks {
     param([string]$TarPath,[string]$OuterRoot,$Blocks,[string]$DestinationFolder,[bool]$SalvageMode = $false)
+
     $script:lastSalvageSkippedBlocks = @()
+
     foreach($block in @($Blocks)){
         $blockLabel = "$($block.id) $($block.group) $($block.path)"
+
         try {
             $blockPath = Resolve-SafeBlockPath $OuterRoot ([string]$block.path)
             if(-not(Test-Path -LiteralPath $blockPath)){ throw "Block missing: $($block.path)" }
+
             if($block.sha256){
                 $actualHash = Get-FileSHA256 $blockPath
-                if($actualHash -ne ([string]$block.sha256).ToLowerInvariant()){ throw "Block SHA256 mismatch: $($block.path)" }
+                if($actualHash -ne ([string]$block.sha256).ToLowerInvariant()){
+                    throw "Block SHA256 mismatch: $($block.path)"
+                }
             }
+
             Test-ArchiveEntriesSafe $TarPath $blockPath
             Invoke-Tar $TarPath @("-xf",$blockPath,"-C",$DestinationFolder) "Block extraction failed: $($block.path)."
         } catch {
             $reason = [string]$_.Exception.Message
+
             if($SalvageMode){
                 $script:lastSalvageSkippedBlocks += "SKIPPED: $blockLabel`r`nReason: $reason"
                 continue
             }
+
             throw
         }
     }
+
     return @($script:lastSalvageSkippedBlocks)
 }
 
 function Extract-SmartArchive {
     param([string]$TarPath,[string]$ArchivePath,[string]$DestinationFolder,[bool]$SalvageMode = $false)
+
     if(-not(Test-Path -LiteralPath $TarPath)){ throw "tar.exe was not found." }
     if(-not(Test-Path -LiteralPath $ArchivePath)){ throw "Archive path does not exist." }
     if(Test-Blank $DestinationFolder){ throw "Destination folder is empty." }
+
     if(-not(Test-Path -LiteralPath $DestinationFolder)){ New-Item -ItemType Directory -Path $DestinationFolder -Force | Out-Null }
-    $script:lastSalvageSkippedBlocks = @()
-    $work = Join-Path $env:TEMP ("smarttar_extract_" + [guid]::NewGuid().ToString("N"))
+
+    $work = New-SafeWorkRoot "extract" $ArchivePath
     $outer = Join-Path $work "outer"
     $payload = Join-Path $work "payload"
     New-Item -ItemType Directory -Path $outer,$payload -Force | Out-Null
+
     try {
-        Invoke-Tar $TarPath @("-xf",$ArchivePath,"-C",$outer) "Outer extraction failed."
+        $safeArchive = Prepare-SafeArchiveInput $ArchivePath $work
+        Invoke-Tar $TarPath @("-xf",$safeArchive,"-C",$outer) "Outer extraction failed."
         $manifest = Read-OuterManifest $outer
         [void](Extract-Blocks $TarPath $outer @($manifest.blocks) $payload $SalvageMode)
         Copy-PayloadToFinalDestination $manifest $payload $DestinationFolder $ArchivePath
@@ -894,25 +1064,50 @@ function Extract-SmartArchive {
 
 function Verify-SmartArchive {
     param([string]$TarPath,[string]$ArchivePath)
+
     if(-not(Test-Path -LiteralPath $ArchivePath)){ throw "Archive path does not exist." }
-    $work = Join-Path $env:TEMP ("smarttar_verify_" + [guid]::NewGuid().ToString("N"))
+
+    $work = New-SafeWorkRoot "verify" $ArchivePath
     $outer = Join-Path $work "outer"
     New-Item -ItemType Directory -Path $outer -Force | Out-Null
+
     try {
-        Invoke-Tar $TarPath @("-xf",$ArchivePath,"-C",$outer) "Outer verification failed."
+        $safeArchive = Prepare-SafeArchiveInput $ArchivePath $work
+        Invoke-Tar $TarPath @("-xf",$safeArchive,"-C",$outer) "Outer verification failed."
         $manifest = Read-OuterManifest $outer
         $blocks = @($manifest.blocks)
-        $ok = 0; $fail = 0; $lines = @()
+        $ok = 0
+        $fail = 0
+        $lines = @()
+
         foreach($block in $blocks){
             $blockPath = Resolve-SafeBlockPath $outer ([string]$block.path)
-            if(-not(Test-Path -LiteralPath $blockPath)){ $fail++; $lines += "MISSING: $($block.path)"; continue }
+
+            if(-not(Test-Path -LiteralPath $blockPath)){
+                $fail++
+                $lines += "MISSING: $($block.path)"
+                continue
+            }
+
             $listed = Invoke-TarList $TarPath $blockPath
             $hashOk = $true
-            if($block.sha256){ $hashOk = ((Get-FileSHA256 $blockPath) -eq ([string]$block.sha256).ToLowerInvariant()) }
-            if($listed -and $hashOk){ $ok++; $lines += "OK: $($block.id) $($block.group) $($block.display) $($block.path)" }else{ $fail++; $lines += "FAIL: $($block.id) $($block.group) $($block.path)" }
+
+            if($block.sha256){
+                $hashOk = ((Get-FileSHA256 $blockPath) -eq ([string]$block.sha256).ToLowerInvariant())
+            }
+
+            if($listed -and $hashOk){
+                $ok++
+                $lines += "OK: $($block.id) $($block.group) $($block.display) $($block.path)"
+            }else{
+                $fail++
+                $lines += "FAIL: $($block.id) $($block.group) $($block.path)"
+            }
         }
+
         $status = if($fail -eq 0){ "Archive verification OK" }else{ "Archive verification FAILED" }
         $archiveSize = [int64](Get-Item -LiteralPath $ArchivePath).Length
+
         return @"
 $status
 
@@ -936,14 +1131,19 @@ $($lines -join "`r`n")
 
 function Get-ArchiveSummary {
     param([string]$TarPath,[string]$ArchivePath,[string]$SourcePath)
+
     $sourceBytes = Get-SourceSize $SourcePath
     $archiveBytes = [int64](Get-Item -LiteralPath $ArchivePath).Length
-    $ratio = "n/a"; $saved = "n/a"
+    $ratio = "n/a"
+    $saved = "n/a"
+
     if($sourceBytes -gt 0){
         $ratio = "{0:N2} %" -f (($archiveBytes / $sourceBytes) * 100)
         $saved = "{0:N2} %" -f ((1 - ($archiveBytes / $sourceBytes)) * 100)
     }
+
     $verify = Verify-SmartArchive $TarPath $ArchivePath
+
     return @"
 Archive created successfully.
 
@@ -961,39 +1161,54 @@ $verify
 # ============================================================================
 function Compress-SmartArchive {
     param([string]$TarPath,[string]$Source,[string]$Destination,[string]$Mode)
+
     if(-not(Test-Path -LiteralPath $TarPath)){ throw "tar.exe was not found." }
+
     $Source = Normalize-ArchiveSourcePath $Source
     if(-not(Test-Path -LiteralPath $Source)){ throw "Source path does not exist." }
+
     if(Test-Path -LiteralPath $Destination){ Remove-Item -LiteralPath $Destination -Force }
     if($Mode -notin @("Hybrid","Smart","Solid","SmartXZ","Store")){ $Mode = "Hybrid" }
 
-    Set-AppStatus "Checking TAR capabilities..." ([System.Drawing.Color]::DarkOrange)
-    $capabilities = Test-TarCapabilities $TarPath
-    if(-not $capabilities.store){ throw "No usable tar store method." }
-
-    $work = Join-Path $env:TEMP ("smarttar_create_" + [guid]::NewGuid().ToString("N"))
+    $work = New-SafeWorkRoot "create" $Source
     $blocksDir = Join-Path $work "blocks"
     $structureStage = Join-Path $work "structure_stage"
-    New-Item -ItemType Directory -Path $work,$blocksDir,$structureStage -Force | Out-Null
+    New-Item -ItemType Directory -Path $blocksDir,$structureStage -Force | Out-Null
+
     try {
+        Set-AppStatus "Checking TAR capabilities..." ([System.Drawing.Color]::DarkOrange)
+        $capabilities = Test-TarCapabilities $TarPath $work
+        if(-not $capabilities.store){ throw "No usable tar store method." }
+
         $sourceItem = Get-Item -LiteralPath $Source -Force
         $sourceParent = Split-Path -Parent $Source
         $sourceLeaf = Split-Path -Leaf $Source
+
         if(Test-Blank $sourceParent){ $sourceParent = (Get-Location).Path }
         if(Test-Blank $sourceLeaf){ $sourceParent = $Source; $sourceLeaf = "." }
+
         Set-AppStatus "Analyzing source..." ([System.Drawing.Color]::DarkOrange)
         $profile = Get-SourceProfile $sourceItem $Source $sourceParent
         $groups = New-ArchiveGroups $Mode $capabilities $profile
+
         Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups
         $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage
         $storeMethod = Select-StoreMethod $capabilities
+
         Set-AppStatus "Creating internal blocks..." ([System.Drawing.Color]::DarkOrange)
-        $blocks = Build-Blocks $TarPath $groups $blocksDir $sourceParent $structureStage $dirCount $storeMethod
+        $blocks = Build-Blocks $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod
         if($blocks.Count -lt 1){ throw "No blocks were created." }
+
         $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks
         Write-Manifest (Join-Path $work "manifest.json") $manifest
+
         Set-AppStatus "Creating outer .star container..." ([System.Drawing.Color]::DarkOrange)
-        Invoke-Tar $TarPath @("-cf",$Destination,"-C",$work,"manifest.json","blocks") "Outer .star archive creation failed."
+        $safeOuter = Join-Path $work "archive.star"
+        Invoke-Tar $TarPath @("-cf",$safeOuter,"-C",$work,"manifest.json","blocks") "Outer .star archive creation failed."
+
+        $destDir = [System.IO.Path]::GetDirectoryName($Destination)
+        if(-not(Test-Path -LiteralPath $destDir)){ New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+        Move-Item -LiteralPath $safeOuter -Destination $Destination -Force
     } finally {
         if(Test-Path -LiteralPath $work){ Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
     }
@@ -1017,6 +1232,7 @@ function Ensure-StarExtension {
 
 function Get-DefaultArchiveBaseName {
     param([string]$Path,[string]$Type)
+
     $leaf = Split-Path -Leaf (Normalize-ArchiveSourcePath $Path)
     if(Test-Blank $leaf){ return "archive_$(Get-Date -Format yyyyMMdd_HHmmss)" }
     if($Type -eq "Folder"){ return $leaf }
@@ -1034,17 +1250,21 @@ function Get-SelectedCompressionMode {
 
 function Set-DefaultTarget {
     if(Test-Blank $script:selectedPath){ return }
+
     $parent = Split-Path -Parent $script:selectedPath
     if(Test-Blank $parent){ $parent = $scriptDir }
+
     if($script:selectedType -eq "File" -and (Test-SmartArchivePath $script:selectedPath)){
         $txtTarget.Text = $parent
         return
     }
+
     $txtTarget.Text = Join-Path $parent ((Get-DefaultArchiveBaseName $script:selectedPath $script:selectedType) + ".star")
 }
 
 function Set-SelectedPath {
     param([string]$Path,[ValidateSet("File","Folder")][string]$Type)
+
     $script:selectedPath = $Path
     $script:selectedType = $Type
     $lblSelected.Text = "Selected: $Path"
@@ -1055,7 +1275,7 @@ function Set-SelectedPath {
 # 10. GUI construction
 # ============================================================================
 $form = New-UiObject "System.Windows.Forms.Form" @{
-    Text            = "SmartTAR STAR Fix 12 RC3 - Salvage Mode"
+    Text            = "SmartTAR STAR Fix 12 RC6 - Safe Path Build"
     ClientSize      = (New-Size 505 490)
     StartPosition   = "CenterScreen"
     BackColor       = $cBg
@@ -1068,9 +1288,11 @@ $btnFile     = New-EcoButton "Add FILE" 20 48 150 30
 $btnFolder   = New-EcoButton "Add FOLDER" 177 48 150 30
 $btnArchive  = New-EcoButton "Add ARCHIVE" 334 48 151 30
 $lblSelected = New-EcoLabel "Selected: none" 20 88 465 20 $fItalic ([System.Drawing.Color]::DimGray)
+
 $lblTarget = New-EcoLabel "2. Destination archive / extraction parent folder:" 20 125 -Font $fBold
 $txtTarget = New-UiObject "System.Windows.Forms.TextBox" @{Location=(New-Point 20 153);Size=(New-Size 395 23);Font=$fNormal;ReadOnly=$true;BackColor=$cBg}
 $btnTarget = New-EcoButton "..." 422 152 63 24
+
 $lblMode = New-EcoLabel "3. Compression mode:" 20 195 -Font $fBold
 $cmbMode = New-UiObject "System.Windows.Forms.ComboBox" @{Location=(New-Point 20 223);Size=(New-Size 465 24);Font=$fNormal;DropDownStyle=[System.Windows.Forms.ComboBoxStyle]::DropDownList}
 [void]$cmbMode.Items.Add("Hybrid - chunked args XZ9 + ZSTD19 + STORE")
@@ -1079,15 +1301,26 @@ $cmbMode = New-UiObject "System.Windows.Forms.ComboBox" @{Location=(New-Point 20
 [void]$cmbMode.Items.Add("Smart XZ - grouped XZ9 chunked blocks")
 [void]$cmbMode.Items.Add("Store - chunked TAR blocks without compression")
 $cmbMode.SelectedIndex = 0
-$lblInfo = New-EcoLabel "Fix 12 RC3: block verify, root-preserving extract and optional salvage mode." 20 252 465 20 $fItalic ([System.Drawing.Color]::DimGray)
+
+$lblInfo = New-EcoLabel "Fix 12 RC6: safe work folder + hardlink stage to avoid tar path error 123." 20 252 465 20 $fItalic ([System.Drawing.Color]::DimGray)
+
 $btnCompress = New-EcoButton "COMPRESS" 20 287 150 42 $fBold ([System.Drawing.Color]::SeaGreen) ([System.Drawing.Color]::White)
 $btnExtract  = New-EcoButton "EXTRACT" 177 287 150 42 $fBold ([System.Drawing.Color]::SteelBlue) ([System.Drawing.Color]::White)
 $btnVerify   = New-EcoButton "VERIFY" 334 287 151 42 $fBold ([System.Drawing.Color]::DarkSlateGray) ([System.Drawing.Color]::White)
+
 $chkOpenFolder = New-EcoCheck "Open output folder after success" 20 342 300 $true
 $chkSalvageMode = New-EcoCheck "Salvage mode (Ignore broken blocks)" 20 366 330 $false
+
 $lblStatus = New-EcoLabel "Ready." 20 404 465 20 $fItalic ([System.Drawing.Color]::DimGray)
 $progressBar = New-UiObject "System.Windows.Forms.ProgressBar" @{Location=(New-Point 20 447);Size=(New-Size 465 8);Style=[System.Windows.Forms.ProgressBarStyle]::Marquee;Visible=$false;MarqueeAnimationSpeed=25}
-$form.Controls.AddRange([System.Windows.Forms.Control[]]@($lblInput,$btnFile,$btnFolder,$btnArchive,$lblSelected,$lblTarget,$txtTarget,$btnTarget,$lblMode,$cmbMode,$lblInfo,$btnCompress,$btnExtract,$btnVerify,$chkOpenFolder,$chkSalvageMode,$lblStatus,$progressBar))
+
+$form.Controls.AddRange([System.Windows.Forms.Control[]]@(
+    $lblInput,$btnFile,$btnFolder,$btnArchive,$lblSelected,
+    $lblTarget,$txtTarget,$btnTarget,
+    $lblMode,$cmbMode,$lblInfo,
+    $btnCompress,$btnExtract,$btnVerify,
+    $chkOpenFolder,$chkSalvageMode,$lblStatus,$progressBar
+))
 
 # ============================================================================
 # 11. GUI events
@@ -1095,51 +1328,114 @@ $form.Controls.AddRange([System.Windows.Forms.Control[]]@($lblInput,$btnFile,$bt
 $btnFile.Add_Click({
     $dialog = New-Object System.Windows.Forms.OpenFileDialog
     $dialog.Filter = "All files (*.*)|*.*"
-    try { if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){ Set-SelectedPath $dialog.FileName "File" } } finally { $dialog.Dispose() }
+    try {
+        if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){
+            Set-SelectedPath $dialog.FileName "File"
+        }
+    } finally {
+        $dialog.Dispose()
+    }
 })
+
 $btnFolder.Add_Click({
     $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    try { if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){ Set-SelectedPath (Normalize-ArchiveSourcePath $dialog.SelectedPath) "Folder" } } finally { $dialog.Dispose() }
+    try {
+        if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){
+            Set-SelectedPath (Normalize-ArchiveSourcePath $dialog.SelectedPath) "Folder"
+        }
+    } finally {
+        $dialog.Dispose()
+    }
 })
+
 $btnArchive.Add_Click({
     $dialog = New-Object System.Windows.Forms.OpenFileDialog
     $dialog.Filter = "SmartTAR Archive (*.star)|*.star|Legacy (*.sarc.tar)|*.sarc.tar|All files (*.*)|*.*"
-    try { if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){ Set-SelectedPath $dialog.FileName "File" } } finally { $dialog.Dispose() }
+    try {
+        if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){
+            Set-SelectedPath $dialog.FileName "File"
+        }
+    } finally {
+        $dialog.Dispose()
+    }
 })
+
 $btnTarget.Add_Click({
     if($script:selectedType -eq "File" -and (Test-SmartArchivePath $script:selectedPath)){
         $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-        try { if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){ $txtTarget.Text = $dialog.SelectedPath } } finally { $dialog.Dispose() }
+        try {
+            if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){
+                $txtTarget.Text = $dialog.SelectedPath
+            }
+        } finally {
+            $dialog.Dispose()
+        }
         return
     }
+
     $dialog = New-Object System.Windows.Forms.SaveFileDialog
     $dialog.Filter = "SmartTAR Archive (*.star)|*.star|All files (*.*)|*.*"
     $dialog.DefaultExt = "star"
     $dialog.AddExtension = $true
-    try { if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){ $txtTarget.Text = Ensure-StarExtension $dialog.FileName } } finally { $dialog.Dispose() }
+    try {
+        if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){
+            $txtTarget.Text = Ensure-StarExtension $dialog.FileName
+        }
+    } finally {
+        $dialog.Dispose()
+    }
 })
 
 # ============================================================================
 # 12. Execution handlers
 # ============================================================================
 function Execute-Compress {
-    if(-not(Test-Path -LiteralPath $tarPath)){ Show-Message "tar.exe was not found." "Missing TAR" ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null; return }
-    if(Test-Blank $script:selectedPath){ Show-Message "Select input first." | Out-Null; return }
+    if(-not(Test-Path -LiteralPath $tarPath)){
+        Show-Message "tar.exe was not found." "Missing TAR" ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return
+    }
+
+    if(Test-Blank $script:selectedPath){
+        Show-Message "Select input first." | Out-Null
+        return
+    }
+
     $targetPath = Ensure-StarExtension ($txtTarget.Text.Trim('"'))
-    if(Test-Blank $targetPath){ Show-Message "Select destination." | Out-Null; return }
+    if(Test-Blank $targetPath){
+        Show-Message "Select destination." | Out-Null
+        return
+    }
+
     $targetDir = [System.IO.Path]::GetDirectoryName($targetPath)
-    if(Test-Blank $targetDir){ $targetDir = $scriptDir; $targetPath = Join-Path $targetDir ([System.IO.Path]::GetFileName($targetPath)) }
+    if(Test-Blank $targetDir){
+        $targetDir = $scriptDir
+        $targetPath = Join-Path $targetDir ([System.IO.Path]::GetFileName($targetPath))
+    }
+
     if(Test-Path -LiteralPath $targetPath){
         $confirm = Show-Message "Target exists. Overwrite?" "Overwrite" ([System.Windows.Forms.MessageBoxIcon]::Warning) ([System.Windows.Forms.MessageBoxButtons]::YesNo)
         if($confirm -ne [System.Windows.Forms.DialogResult]::Yes){ return }
     }
+
     $mode = Get-SelectedCompressionMode
     Start-UiWork
-    $success = $false; $errorMessage = $null
-    try { Compress-SmartArchive $tarPath $script:selectedPath $targetPath $mode; $success = $true } catch { $errorMessage = Get-ErrorDetails $_ } finally { Stop-UiWork }
+
+    $success = $false
+    $errorMessage = $null
+
+    try {
+        Compress-SmartArchive $tarPath $script:selectedPath $targetPath $mode
+        $success = $true
+    } catch {
+        $errorMessage = Get-ErrorDetails $_
+    } finally {
+        Stop-UiWork
+    }
+
     if($success){
         Set-AppStatus "Archive created successfully. Mode: $mode." ([System.Drawing.Color]::Green)
         $reportPath = Get-ReportPath $targetPath "create_report"
+
         try {
             $summary = Get-ArchiveSummary $tarPath $targetPath $script:selectedPath
             [void](Write-ReportFile $reportPath $summary)
@@ -1149,52 +1445,99 @@ function Execute-Compress {
             [void](Write-ReportFile $reportPath $verifyError)
             Show-Message "Archive created, but verify failed:`r`n$verifyError`r`nReport saved:`r`n$reportPath" "Archive Created - Verify Failed" ([System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
         }
+
         if($chkOpenFolder.Checked){ explorer.exe "/select,`"$targetPath`"" }
         return
     }
+
     Set-AppStatus "Compression failed." ([System.Drawing.Color]::Red)
     Show-Message "Compression failed.`n`n$errorMessage" "SmartTAR Error" ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
 }
 
 function Execute-Extract {
-    if(Test-Blank $script:selectedPath){ Show-Message "Select archive first." | Out-Null; return }
+    if(Test-Blank $script:selectedPath){
+        Show-Message "Select archive first." | Out-Null
+        return
+    }
+
     $destination = $txtTarget.Text.Trim('"')
-    if(Test-Blank $destination){ Show-Message "Select extraction parent folder." | Out-Null; return }
-    if(-not(Test-Path -LiteralPath $destination)){ New-Item -ItemType Directory -Path $destination -Force | Out-Null }
+    if(Test-Blank $destination){
+        Show-Message "Select extraction parent folder." | Out-Null
+        return
+    }
+
+    if(-not(Test-Path -LiteralPath $destination)){
+        New-Item -ItemType Directory -Path $destination -Force | Out-Null
+    }
+
     $salvageMode = [bool]$chkSalvageMode.Checked
     Start-UiWork
-    $success = $false; $errorMessage = $null
-    try { Extract-SmartArchive $tarPath $script:selectedPath $destination $salvageMode; $success = $true } catch { $errorMessage = Get-ErrorDetails $_ } finally { Stop-UiWork }
+
+    $success = $false
+    $errorMessage = $null
+
+    try {
+        Extract-SmartArchive $tarPath $script:selectedPath $destination $salvageMode
+        $success = $true
+    } catch {
+        $errorMessage = Get-ErrorDetails $_
+    } finally {
+        Stop-UiWork
+    }
+
     $reportPath = Get-ReportPath $script:selectedPath "extract_report"
+
     if($success){
         $skipped = @($script:lastSalvageSkippedBlocks)
         $modeText = if($salvageMode){ "Salvage mode: ON" }else{ "Salvage mode: OFF" }
         $text = "Archive extracted successfully.`r`nArchive: $($script:selectedPath)`r`nExtraction parent folder: $destination`r`n$modeText"
+
         if($salvageMode -and $skipped.Count -gt 0){
             $text += "`r`n`r`nWARNING: Some blocks were skipped.`r`nSkipped blocks: $($skipped.Count)`r`n`r`n$($skipped -join "`r`n`r`n")"
         }elseif($salvageMode){
             $text += "`r`n`r`nNo broken blocks were detected. Nothing was skipped."
         }
+
         [void](Write-ReportFile $reportPath $text)
         Show-Message "$text`r`n`r`nReport saved:`r`n$reportPath" "Extract Archive" | Out-Null
+
         if($chkOpenFolder.Checked){ explorer.exe "`"$destination`"" }
         return
     }
+
     [void](Write-ReportFile $reportPath "Extraction failed.`r`n`r`n$errorMessage")
     Show-Message "Extraction failed.`n`n$errorMessage" "SmartTAR Error" ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
 }
 
 function Execute-Verify {
-    if(Test-Blank $script:selectedPath){ Show-Message "Select archive first." | Out-Null; return }
+    if(Test-Blank $script:selectedPath){
+        Show-Message "Select archive first." | Out-Null
+        return
+    }
+
     Start-UiWork
-    $success = $false; $errorMessage = $null; $summary = $null
-    try { $summary = Verify-SmartArchive $tarPath $script:selectedPath; $success = $true } catch { $errorMessage = Get-ErrorDetails $_ } finally { Stop-UiWork }
+
+    $success = $false
+    $errorMessage = $null
+    $summary = $null
+
+    try {
+        $summary = Verify-SmartArchive $tarPath $script:selectedPath
+        $success = $true
+    } catch {
+        $errorMessage = Get-ErrorDetails $_
+    } finally {
+        Stop-UiWork
+    }
+
     $reportPath = Get-ReportPath $script:selectedPath "verify_report"
+
     if($success){
         [void](Write-ReportFile $reportPath $summary)
         Show-Message "$summary`r`nReport saved:`r`n$reportPath" "Verify Archive" | Out-Null
         return
     }
+
     [void](Write-ReportFile $reportPath "Verification failed.`r`n`r`n$errorMessage")
     Show-Message "Verification failed.`n`n$errorMessage" "SmartTAR Error" ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
 }
