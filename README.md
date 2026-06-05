@@ -1,61 +1,48 @@
 # SmartTAR STAR
 
-**SmartTAR STAR** is an experimental Windows PowerShell GUI archiver built on top of the built-in Windows `tar.exe` / bsdtar engine.
+**SmartTAR STAR** is an experimental Windows PowerShell GUI archiver built on top of the native Windows `tar.exe` (bsdtar) engine.
 
 It creates transparent `.star` archives containing:
+- An outer TAR container
+- A central `manifest.json` file
+- Internal compressed TAR blocks
+- SHA-256 block integrity hashes
+- Recovery-friendly metadata
 
-- an outer TAR container,
-- a `manifest.json` file,
-- one or more internal compressed TAR blocks,
-- SHA-256 block hashes,
-- recovery-friendly metadata.
+SmartTAR focuses on **transparent recovery, human-readable archive structure, and automatic compression planning** instead of using a proprietary black-box format.
 
-SmartTAR focuses on **transparent recovery, readable archive structure, and automatic compression planning** rather than using a proprietary black-box format.
-
-> Current status: **Beta / experimental**  
+> Current status: **Beta / Experimental**  
 > Documented version: **SmartTAR STAR 1.0 Beta 1 Fix 2 XZ9 XZStable - Clean**
 
 ---
 
 ## Highlights
 
-- Windows GUI built with PowerShell WinForms.
-- Uses Windows `tar.exe` only.
-- Default archive extension: `.star`.
-- Supports legacy archive extension: `.sarc.tar`.
-- Block-based archive layout with a JSON manifest.
-- Multiple compression modes:
-  - **Hybrid** — recommended balanced planner,
-  - **Smart** — detailed grouped blocks,
-  - **Solid** — one auto-selected block,
-  - **Smart XZ** — grouped XZ9-oriented blocks.
-- Automatic capability detection for available TAR compression methods.
-- SHA-256 verification of internal blocks.
-- Manual recovery-friendly structure.
-- Extraction safety checks against unsafe paths.
-- Operation reports for create, extract, and verify actions.
+- **Native GUI:** Built with PowerShell and Windows Forms (WinForms).
+- **Zero Dependencies:** Relies strictly on the built-in Windows `tar.exe`.
+- **Flexible Extensions:** Uses `.star` by default; supports legacy `.sarc.tar`.
+- **Structured Layout:** Block-based architecture managed via a JSON manifest.
+- **Intelligent Planning:** Four distinct compression modes:
+  - `Hybrid` — Recommended balanced automated planner
+  - `Smart` — Granular file-type grouping
+  - `Solid` — Single auto-selected compression block
+  - `Smart XZ` — Granular grouping optimized for XZ9 compression
+- **Dynamic Detection:** Automatic capability testing for available TAR compression algorithms.
+- **Integrity Validation:** Strict SHA-256 hashing for all internal blocks.
+- **Safety First:** Path-traversal protection and extraction safety checks.
+- **Audit Logs:** Detailed operation reports for creation, extraction, and verification.
 
 ---
 
 ## Screenshot
 
-Place your GUI screenshot here:
-
-```text
-docs/images/smarttar-gui.png
-```
-
-Then enable it in this README by replacing this paragraph with:
-
-```markdown
 ![SmartTAR STAR GUI](docs/images/smarttar-gui.png)
-```
 
 ---
 
 ## Archive Design
 
-A `.star` archive is a standard TAR file. Inside it, SmartTAR stores a manifest and internal blocks:
+A `.star` archive is a standard, uncompressed TAR file. SmartTAR organizes data inside this container as follows:
 
 ```text
 archive.star
@@ -67,233 +54,167 @@ archive.star
     └── ...
 ```
 
-The manifest describes the archive, source profile, compression mode, block list, compression methods, SHA-256 hashes, sizes, and deterministic timestamp metadata.
+The `manifest.json` stores archive metadata, source profiles, compression modes, block lists, SHA-256 hashes, sizes, and deterministic timestamps. 
 
-Because the outer archive is a standard TAR container, it can be inspected manually with common TAR tools.
+Because the outer container is a standard TAR file, it can be inspected natively by any standard archive manager.
 
 ---
 
 ## Compression Methods
 
-SmartTAR checks which methods are supported by the available `tar.exe` and uses only methods that pass a runtime capability test.
+SmartTAR performs a runtime capability test on `tar.exe` and utilizes only the supported algorithms.
 
-| Method | Extension | Purpose |
-|---|---:|---|
-| STORE | `.tar` | No compression. Useful for directory structure, media, and already-compressed files. |
-| GZIP | `.tar.gz` | Fallback compression. |
-| BZIP2 | `.tar.bz2` | Fallback compression. |
-| XZ9 | `.tar.xz` | XZ compression level 9 when supported. |
-| XZ | `.tar.xz` | Default XZ fallback. |
-| ZSTD19 | `.tar.zst` | Zstandard level 19 when supported by the TAR engine. |
 
-If a preferred method is unavailable, SmartTAR automatically falls back to the next usable method.
+| Method | Extension | Target Data & Purpose |
+| :--- | :--- | :--- |
+| **STORE** | `.tar` | No compression. Used for directory structures, media, and pre-compressed files. |
+| **GZIP** | `.tar.gz` | Standard fallback compression. |
+| **BZIP2** | `.tar.bz2` | High-ratio fallback compression. |
+| **XZ9** | `.tar.xz` | XZ compression at maximum level 9 (when supported). |
+| **XZ** | `.tar.xz` | Standard XZ compression fallback. |
+| **ZSTD19** | `.tar.zst` | Zstandard compression at level 19 (when supported). |
+
+*Note: If a preferred high-ratio method is unavailable, SmartTAR automatically falls back to the next best alternative.*
 
 ---
 
 ## Compression Modes
 
-### Hybrid
-
-Recommended default mode.
-
-Hybrid mode groups files into broad categories:
-
-- `structure` — directory structure, stored,
-- `compressible` — general compressible files, prefers XZ9/XZ,
-- `diskimage` — disk image files, prefers ZSTD19,
-- `stored` — media and archive-like files, stored without recompression.
+### Hybrid (Recommended)
+The default balanced planner. It groups files into four broad categories:
+- `structure`: Directory hierarchy (Stored).
+- `compressible`: General text and documents (Prefers XZ9/XZ).
+- `diskimage`: Virtual disks and raw images (Prefers ZSTD19).
+- `stored`: Media and archives (Stored to prevent redundant compression).
 
 ### Smart
-
-Detailed grouped mode.
-
-Smart mode separates files into more specific groups:
-
-- text,
-- binary,
-- executable,
-- disk image,
-- media,
-- archives,
-- unknown.
-
-Text and unknown data prefer XZ9/XZ. Binary, executable, and disk image data prefer ZSTD19 when available. Media and archive-like files are stored.
+A granular grouping mode that segregates files into specific blocks:
+- Text & Unknown data (Prefers XZ9/XZ)
+- Binary, Executables & Disk Images (Prefers ZSTD19)
+- Media & Archives (Stored)
 
 ### Solid
-
-Creates one main block using an automatically selected compression method based on the source profile.
-
-If binary-like data dominates and ZSTD19 is available, ZSTD19 may be selected. Otherwise, XZ9/XZ is preferred.
+Consolidates all files into a single main block. The compression method is auto-selected based on the dominant file type in the source payload (ZSTD19 for binaries, XZ9/XZ otherwise).
 
 ### Smart XZ
-
-Groups files similarly to Smart mode, but compressible groups prefer XZ9/XZ. Media and archive-like groups are stored because they are usually already compressed.
+Follows the same granular grouping as **Smart** mode, but forces all compressible groups to use XZ9/XZ.
 
 ---
 
 ## Deterministic Timestamp Handling
 
-SmartTAR includes targeted timestamp stabilization for XZ/XZ9 blocks.
+To optimize deduplication and block consistency, SmartTAR includes targeted timestamp stabilization for XZ/XZ9 blocks.
 
-When any XZ/XZ9 block is used, SmartTAR normalizes timestamps for those XZ-related staging trees to:
-
+When an XZ-based block is generated, SmartTAR normalizes the timestamps within those specific staging trees to a fixed baseline:
 ```text
 2000-01-01T00:00:00Z
 ```
 
-Important details:
-
-- Timestamp normalization is applied only to XZ/XZ9 block stages.
-- STORE and ZSTD stages keep their natural timestamps.
-- The manifest records whether deterministic metadata was enabled and what scope was affected.
+**Key Behaviors:**
+- Normalization applies **only** to XZ/XZ9 block stages.
+- STORE, GZIP, BZIP2, and ZSTD stages preserve their original timestamps.
+- The `manifest.json` logs whether deterministic metadata was applied and its exact scope.
 
 ---
 
 ## Requirements
 
-- Windows.
-- PowerShell with Windows Forms support.
-- Windows `tar.exe` available in:
-  - `%SystemRoot%\System32\tar.exe`, or
-  - a location discoverable through `PATH`.
+- **OS:** Windows 10 / 11 or Windows Server.
+- **Environment:** Windows PowerShell (or PowerShell 7+) with WinForms support.
+- **Engine:** Windows `tar.exe` located in `%SystemRoot%\System32\` or available via system `PATH`.
 
-No additional compression binaries are bundled or required by the script itself.
+*No external binaries or third-party archiving tools are required.*
 
 ---
 
 ## How to Run
 
-Save the script as:
+1. Save the script to: `src/SmartTAR.ps1`
+2. Open PowerShell and execute the GUI using the appropriate command:
 
-```text
-src/SmartTAR.ps1
-```
-
-Run it from PowerShell:
-
+**Windows PowerShell (Built-in):**
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\src\SmartTAR.ps1
 ```
 
-Or with PowerShell 7:
-
+**PowerShell 7+ (Core):**
 ```powershell
 pwsh.exe -ExecutionPolicy Bypass -File .\src\SmartTAR.ps1
 ```
-
-The script opens a GUI window.
 
 ---
 
 ## Basic Usage
 
 ### Create an Archive
-
-1. Click **Add FILE** or **Add FOLDER**.
-2. Select the source file or folder.
-3. Choose the destination archive path.
-4. Select a compression mode.
-5. Click **COMPRESS**.
-6. After completion, SmartTAR shows a summary and writes a create report next to the archive.
+1. Click **Add FILE** or **Add FOLDER** to load your source data.
+2. Define your destination archive path.
+3. Select a **Compression Mode** (e.g., *Hybrid*).
+4. Click **COMPRESS**. A creation report will be generated alongside the new archive.
 
 ### Extract an Archive
-
-1. Click **Add ARCHIVE**.
-2. Select a `.star` or `.sarc.tar` archive.
-3. Choose the extraction folder.
-4. Click **EXTRACT**.
-5. SmartTAR extracts verified internal blocks into the destination folder.
+1. Click **Add ARCHIVE** and select a `.star` or `.sarc.tar` file.
+2. Specify the target destination folder.
+3. Click **EXTRACT**. SmartTAR will validate the blocks and unpack the contents safely.
 
 ### Verify an Archive
-
 1. Click **Add ARCHIVE**.
-2. Select a `.star` or `.sarc.tar` archive.
-3. Click **VERIFY**.
-4. SmartTAR checks the outer container, manifest, internal blocks, TAR readability, SHA-256 hashes, and sizes.
+2. Click **VERIFY**.
+3. The engine will perform a full structural audit: checking container readability, manifest validity, block sizes, and SHA-256 integrity hashes.
 
 ---
 
 ## Reports
 
-SmartTAR writes text reports next to the selected archive.
-
-Examples:
+SmartTAR automatically generates detailed text logs in the destination directory:
 
 ```text
 archive.star.create_report.20260101_120000.txt
 archive.star.extract_report.20260101_120000.txt
 archive.star.verify_report.20260101_120000.txt
 ```
-
-Reports include operation status, archive size, source size, compression ratio, used methods, deterministic metadata information, and per-block verification details.
+Reports contain operation benchmarks, compression ratios, applied methods, deterministic scopes, and block-by-block verification results.
 
 ---
 
 ## Manual Recovery
 
-Because the outer archive is a standard TAR file, it can be unpacked manually.
+Since the `.star` format is built entirely on open standards, you do not need SmartTAR to recover your data. If the GUI is unavailable, extract the files manually using any command-line tool:
 
-```powershell
-tar -xf archive.star -C outer
-```
-
-Then inspect:
-
-```text
-outer\manifest.json
-outer\blocks\
-```
-
-Extract a block manually:
-
-```powershell
-tar -xf outer\blocks\000001_solid.tar.xz -C restore
-```
-
-If a tool does not recognize `.star`, rename the archive to `.tar` and inspect it manually.
+1. **Extract the outer container:**
+   ```powershell
+   tar -xf archive.star -C outer_extraction/
+   ```
+2. **Inspect the contents:** Navigate to `outer_extraction/manifest.json` and the `blocks/` directory.
+3. **Extract individual data blocks:**
+   ```powershell
+   tar -xf outer_extraction/blocks/000002_text.tar.xz -C restored_data/
+   ```
+*(Note: If your extraction tool does not recognize the `.star` extension, simply rename the file to `.tar`)*
 
 ---
 
 ## Safety Features
 
-SmartTAR performs several safety checks during extraction and verification:
-
-- validates that block paths in the manifest are relative and safe,
-- rejects absolute paths,
-- rejects drive-letter paths,
-- rejects path traversal using `..`,
-- lists TAR block contents before extraction,
-- validates SHA-256 hashes when present.
-
-These checks help reduce the risk of unsafe extraction paths.
+To prevent malicious exploits during extraction, SmartTAR enforces strict safety checks:
+- **Path Sanitization:** Rejects absolute paths and drive letters (`C:\`) in the manifest.
+- **Traversal Protection:** Blocks path traversal attempts (e.g., `../`).
+- **Dry-Run Inspection:** Pre-lists TAR block contents before writing to disk.
+- **Integrity Enforcement:** Fails extraction if SHA-256 hashes do not match the manifest records.
 
 ---
 
 ## Limitations
 
-- Compression support depends on the installed Windows `tar.exe` / bsdtar capabilities.
-- ZSTD support may not be available on every Windows installation.
-- Progress is shown as an indeterminate progress bar, not an exact percentage.
-- Very large folder trees may take time during staging because files are copied into temporary grouped staging folders.
-- The archive format is currently experimental and may change before a stable release.
-- SmartTAR is not intended to replace mature production archivers at this stage.
-
----
-
-## Recommended Default
-
-For most users, use:
-
-```text
-Hybrid - recommended, balanced planner
-```
-
-This mode gives a practical balance between compression efficiency, speed, and avoiding unnecessary recompression of already-compressed media or archive files.
+- **Dependency Limits:** Feature availability (like ZSTD) relies entirely on the capabilities of the host's `tar.exe`.
+- **UI Progress:** Progress indicators are currently indeterminate (marquee) due to limitations in native `tar.exe` CLI output parsing.
+- **Staging Overhead:** Large folder trees require temporary disk space and time during the staging/grouping phase.
+- **Status:** The format is experimental. Layouts and manifest schemas may change in future releases.
 
 ---
 
 ## Disclaimer
 
-SmartTAR is a beta tool. Always verify important archives and keep independent backups of critical data.
+SmartTAR is currently a **Beta** tool. Always verify critical archives and maintain independent backups. 
 
-Although the archive layout is designed to be transparent and recovery-friendly, no archiving tool can guarantee recovery from all forms of file corruption, hardware failure, interrupted writes, or unsupported compression engines.
+While the architecture is explicitly designed for high transparency and manual recovery, no software can guarantee recovery from severe physical drive corruption, interrupted write cycles, or non-compliant system environments.
