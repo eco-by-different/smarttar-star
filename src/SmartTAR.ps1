@@ -1,20 +1,28 @@
 # ============================================================================
-# SmartTAR STAR Fix 12 RC3 - Readable ChunkedArgs + Salvage Mode
+# SmartTAR STAR Fix 12 RC6 - Full Readable Safe-Path Build
 # Windows PowerShell GUI archiver using Windows tar.exe / bsdtar
 #
-# Final candidate features:
-#   - No full file staging copy.
-#   - No tar file-list mode: no @list, no -T, no --files-from.
-#   - File data is archived through normal tar.exe path arguments in safe chunks.
-#   - Directory tree is stored through a tiny folder-only structure stage.
-#   - Manifest contains block metadata and SHA-256 hashes.
-#   - Verify checks every internal block independently.
-#   - Extract preserves the selected root folder.
-#   - Optional salvage extract skips broken blocks and extracts all readable blocks.
+# RC6 targeted reason:
+#   Some Windows bsdtar builds can fail with:
+#       GetVolumePathName failed: 123
+#   when compressed TAR creation touches localized/spaced paths such as
+#   "Nová složka" or user-profile temp paths with diacritics.
 #
-# Path separator safety:
-#   [char]92 = backslash
-#   [char]47 = slash
+# RC6 approach:
+#   - tar.exe works from a safe ASCII work folder whenever possible.
+#   - Internal file blocks are created from temporary hardlink stages.
+#   - Hardlinks avoid full data copy when the safe work folder is on the same drive.
+#   - If hardlink creation is unavailable, the code falls back to Copy-Item.
+#   - The final .star file is created in the safe work folder first, then moved to
+#     the requested destination path.
+#
+# Core features preserved:
+#   - Standard outer TAR container with .star extension.
+#   - manifest.json with block metadata and SHA-256 hashes.
+#   - Internal TAR/TAR.XZ/TAR.ZST/etc. blocks.
+#   - Root-preserving extraction.
+#   - Block verification.
+#   - Optional salvage extraction.
 # ============================================================================
 
 Add-Type -AssemblyName System.Windows.Forms
