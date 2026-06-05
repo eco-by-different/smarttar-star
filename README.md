@@ -36,7 +36,7 @@ SmartTAR focuses on **transparent recovery, human-readable archive structure, an
 
 ## Screenshot
 
-![SmartTAR STAR GUI](docs/images/smarttar-gui.png)
+
 
 ---
 
