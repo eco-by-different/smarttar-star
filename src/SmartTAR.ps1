@@ -1,17 +1,16 @@
 # ============================================================================
-# SmartTAR STAR Fix 13 RC4 - Literal Hardlink Paths
+# SmartTAR STAR Fix 13 RC5 - XZ Deterministic Stage Metadata
 # Windows PowerShell GUI archiver using Windows tar.exe / bsdtar
 #
-# RC4 reason:
-#   RC3 diagnostics showed that group-stage could fail on paths containing
-#   PowerShell wildcard characters, for example: [01].py
+# RC5 targeted change:
+#   - Keeps RC4 literal hardlink path fix for names like [01].py.
+#   - Normalizes DIRECTORY timestamps only for XZ TAR blocks before compression.
+#   - Does not change file timestamps; hardlinked files keep original LastWriteTime.
+#   - Does not normalize STORE / GZIP / BZIP2 / ZSTD blocks.
 #
-# RC4 fix:
-#   - Hardlink creation now treats source/target paths as literal paths.
-#   - Directory creation uses .NET Directory.CreateDirectory to avoid wildcard
-#     interpretation by the PowerShell provider.
-#   - Hardlink creation first tries escaped New-Item paths, then falls back to
-#     cmd.exe mklink /H with quoted literal paths.
+# Goal:
+#   Reduce repeated-run size drift for .tar.xz blocks caused by fresh stage
+#   directory timestamps and the TAR entry for directories / '.'.
 #
 # Preserved features:
 #   - .star outer TAR container.
@@ -296,6 +295,8 @@ $fNormal = [System.Drawing.Font]::new("Segoe UI", 9)
 $fBold   = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
 $fItalic = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Italic)
 
+$script:StableXzStageTime = [datetime]"2000-01-01T00:00:00"
+
 $scriptDir = if($PSScriptRoot){
     $PSScriptRoot
 }elseif($MyInvocation.MyCommand.Path){
@@ -383,7 +384,7 @@ function New-EcoCheck {
 function Show-Message {
     param(
         [string]$Message,
-        [string]$Title = "SmartTAR STAR Fix 13 RC4",
+        [string]$Title = "SmartTAR STAR Fix 13 RC5",
         [System.Windows.Forms.MessageBoxIcon]$Icon = [System.Windows.Forms.MessageBoxIcon]::Information,
         [System.Windows.Forms.MessageBoxButtons]$Buttons = [System.Windows.Forms.MessageBoxButtons]::OK
     )
@@ -753,10 +754,7 @@ function Split-FileChunks {
 }
 
 function New-HardLinkLiteral {
-    param(
-        [string]$LinkPath,
-        [string]$TargetPath
-    )
+    param([string]$LinkPath, [string]$TargetPath)
 
     if(-not(Test-Path -LiteralPath $TargetPath)){
         throw "Hardlink target does not exist: $TargetPath"
@@ -792,12 +790,7 @@ function New-HardLinkLiteral {
 }
 
 function New-HardlinkStageInternal {
-    param(
-        [string]$WorkRoot,
-        $Files,
-        [bool]$AllowCopyFallback,
-        [string]$Prefix
-    )
+    param([string]$WorkRoot, $Files, [bool]$AllowCopyFallback, [string]$Prefix)
 
     $stageRoot = Join-Path $WorkRoot ("{0}_{1}" -f $Prefix, [guid]::NewGuid().ToString("N"))
     [System.IO.Directory]::CreateDirectory($stageRoot) | Out-Null
@@ -840,8 +833,51 @@ function New-ChunkHardlinkStage {
     return New-HardlinkStageInternal $WorkRoot $ChunkFiles $true "argstage"
 }
 
+function Set-XzStageDirectoryTimes {
+    param(
+        [string]$StageRoot,
+        [datetime]$Time = $script:StableXzStageTime
+    )
+
+    if(Test-Blank $StageRoot){ return }
+    if(-not(Test-Path -LiteralPath $StageRoot)){ return }
+
+    # Only directory metadata is normalized. File metadata is intentionally left untouched.
+    $directories = @(
+        Get-ChildItem -LiteralPath $StageRoot -Directory -Recurse -Force -ErrorAction SilentlyContinue |
+            Sort-Object @{Expression = {$_.FullName.Length}; Descending = $true}
+    )
+
+    foreach($directory in $directories){
+        try {
+            $directory.CreationTime = $Time
+            $directory.LastWriteTime = $Time
+            $directory.LastAccessTime = $Time
+        } catch {}
+    }
+
+    try {
+        $root = Get-Item -LiteralPath $StageRoot -Force
+        $root.CreationTime = $Time
+        $root.LastWriteTime = $Time
+        $root.LastAccessTime = $Time
+    } catch {}
+}
+
+function Normalize-XzStageIfNeeded {
+    param([string]$StageRoot, [hashtable]$Method)
+
+    if($Method -and ([string]$Method.Algorithm -eq "xz")){
+        Set-XzStageDirectoryTimes $StageRoot
+        return $true
+    }
+    return $false
+}
+
 function Create-BlockFromStageDirect {
     param([string]$TarPath, [string]$StagePath, [string]$BlockPath, [hashtable]$Method)
+
+    [void](Normalize-XzStageIfNeeded $StagePath $Method)
 
     $args = @()
     $args += $Method.CreateArgs
@@ -855,6 +891,8 @@ function Create-BlockFromStageDirect {
 
 function Create-BlockFromStageList {
     param([string]$TarPath, [string]$StagePath, [string]$BlockPath, [hashtable]$Method, $RelativePaths)
+
+    [void](Normalize-XzStageIfNeeded $StagePath $Method)
 
     $args = @()
     $args += $Method.CreateArgs
@@ -961,6 +999,10 @@ function Build-Blocks {
             Set-AppStatus "Creating group hardlink stage for block $id $safeGroup..." ([System.Drawing.Color]::DarkOrange)
             $stageRoot = New-GroupHardlinkStage $WorkRoot @($group.Files)
 
+            if([string]$group.Method.Algorithm -eq "xz"){
+                Set-AppStatus "Normalizing XZ stage directory timestamps for block $id $safeGroup..." ([System.Drawing.Color]::DarkOrange)
+            }
+
             Set-AppStatus "Creating group block $id $safeGroup..." ([System.Drawing.Color]::DarkOrange)
             Create-BlockFromStageDirect $TarPath $stageRoot $blockPath $group.Method
 
@@ -973,8 +1015,13 @@ function Build-Blocks {
         }
 
         if($ok -and (Test-Path -LiteralPath $blockPath)){
-            Add-GroupDiagnostic $safeGroup "group-stage-ok" "Created as one RC4 group-stage block." ([int]$group.FileCount) ([int64]$group.Bytes)
-            Add-BlockManifestItem ([ref]$blocks) $id $safeGroup $blockPath $group.Method ([string]$group.Reason + " RC4 group-stage block.") ([int]$group.FileCount) 0 ([int64]$group.Bytes)
+            $diagMessage = "Created as one RC5 group-stage block."
+            if([string]$group.Method.Algorithm -eq "xz"){
+                $diagMessage += " XZ directory timestamps normalized."
+            }
+
+            Add-GroupDiagnostic $safeGroup "group-stage-ok" $diagMessage ([int]$group.FileCount) ([int64]$group.Bytes)
+            Add-BlockManifestItem ([ref]$blocks) $id $safeGroup $blockPath $group.Method ([string]$group.Reason + " RC5 group-stage block.") ([int]$group.FileCount) 0 ([int64]$group.Bytes)
             $index++
             continue
         }
@@ -1000,6 +1047,10 @@ function Build-Blocks {
                 $chunkStage = New-ChunkHardlinkStage $WorkRoot $chunkFiles
                 $relativePaths = @($chunkFiles | ForEach-Object { [string]$_.Rel })
 
+                if([string]$group.Method.Algorithm -eq "xz"){
+                    Set-AppStatus "Normalizing XZ fallback stage timestamps for block $id..." ([System.Drawing.Color]::DarkOrange)
+                }
+
                 Set-AppStatus "Creating fallback block $id $fallbackGroup..." ([System.Drawing.Color]::DarkOrange)
                 Create-BlockFromStageList $TarPath $chunkStage $blockPath $group.Method $relativePaths
             } finally {
@@ -1009,7 +1060,7 @@ function Build-Blocks {
             $sourceBytes = [int64]0
             foreach($file in $chunkFiles){ $sourceBytes += [int64]$file.Bytes }
 
-            $reason = ([string]$group.Reason) + " RC4 group-stage failed, RC6 chunk fallback used. Group-stage error: $err"
+            $reason = ([string]$group.Reason) + " RC5 group-stage failed, RC6 chunk fallback used. Group-stage error: $err"
             Add-BlockManifestItem ([ref]$blocks) $id $fallbackGroup $blockPath $group.Method $reason ([int]$chunkFiles.Count) 0 $sourceBytes
 
             $index++
@@ -1040,27 +1091,29 @@ function Build-Manifest {
         format          = "STAR"
         formatVersion   = 1
         tool            = "SmartTAR"
-        toolVersion     = "1.0-beta1-fix13-rc4-literal-hardlink-paths"
+        toolVersion     = "1.0-beta1-fix13-rc5-xz-deterministic-stage-metadata"
         createdUtc      = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
         engine          = "Windows tar.exe"
-        model           = "safe-workroot-group-hardlink-stage-fix13-rc4"
+        model           = "safe-workroot-group-hardlink-stage-fix13-rc5"
         compressionMode = $Mode
         sourceName      = $SourceLeaf
         sourceType      = if($SourceItem.PSIsContainer){ "Folder" }else{ "File" }
         sourceBytes     = Get-SourceSize $Source
         rootRule        = "Root-preserving. File blocks are preferably created as one group-stage block per data type. Extraction root is based on manifest sourceName."
-        creationMode    = "safe-workroot-group-stage-dot-direct-literal-hardlink-with-rc6-fallback"
+        creationMode    = "safe-workroot-group-stage-dot-literal-hardlink-xz-dirtime-normalized-with-rc6-fallback"
         planning        = [ordered]@{
-            strategy              = "direct-tar-C-stage-dot"
-            hardlinkPathMode      = "literal-escaped-newitem-with-mklink-fallback"
-            avoidsFileList        = $true
-            avoidsLongCommandLine = $true
-            preferredBlockModel   = "one-block-per-data-type"
-            fallbackStrategy      = "rc6-chunked-arguments"
-            chunkMaxEntries       = 96
-            chunkMaxChars         = 22000
-            xzMaxLevel            = 9
-            zstdMaxLevel          = 19
+            strategy                 = "direct-tar-C-stage-dot"
+            hardlinkPathMode         = "literal-escaped-newitem-with-mklink-fallback"
+            xzStageDirectoryTimeMode = "directories-only-normalized-to-2000-01-01"
+            xzFileTimeMode           = "preserve-original-hardlink-file-times"
+            avoidsFileList           = $true
+            avoidsLongCommandLine    = $true
+            preferredBlockModel      = "one-block-per-data-type"
+            fallbackStrategy         = "rc6-chunked-arguments"
+            chunkMaxEntries          = 96
+            chunkMaxChars            = 22000
+            xzMaxLevel               = 9
+            zstdMaxLevel             = 19
         }
         capabilities    = [ordered]@{
             store  = [bool]$Capabilities.store
@@ -1536,7 +1589,7 @@ function Set-SelectedPath {
 # 11. GUI construction
 # ============================================================================
 $form = New-UiObject "System.Windows.Forms.Form" @{
-    Text            = "SmartTAR STAR Fix 13 RC4 - Literal Hardlink Paths"
+    Text            = "SmartTAR STAR Fix 13 RC5 - XZ Deterministic Stage Metadata"
     ClientSize      = (New-Size 505 490)
     StartPosition   = "CenterScreen"
     BackColor       = $cBg
@@ -1574,7 +1627,7 @@ $cmbMode = New-UiObject "System.Windows.Forms.ComboBox" @{
 [void]$cmbMode.Items.Add("Store - grouped TAR blocks without compression")
 $cmbMode.SelectedIndex = 0
 
-$lblInfo = New-EcoLabel "Fix 13 RC4: literal hardlink paths for names like [01].py." 20 252 465 20 $fItalic ([System.Drawing.Color]::DimGray)
+$lblInfo = New-EcoLabel "Fix 13 RC5: normalize directory timestamps only for XZ blocks." 20 252 465 20 $fItalic ([System.Drawing.Color]::DimGray)
 
 $btnCompress = New-EcoButton "COMPRESS" 20 287 150 42 $fBold ([System.Drawing.Color]::SeaGreen) ([System.Drawing.Color]::White)
 $btnExtract  = New-EcoButton "EXTRACT" 177 287 150 42 $fBold ([System.Drawing.Color]::SteelBlue) ([System.Drawing.Color]::White)
