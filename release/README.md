@@ -16,7 +16,7 @@ Internal blocks are compressed according to the selected compression mode. Becau
 Recommended version:
 
 ```text
-SmartTAR STAR 1.0 Beta 1 Fix 12 RC6
+SmartTAR STAR Fix 13 RC5
 ```
 
 Fix 12 RC6 highlights:
