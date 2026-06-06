@@ -1,205 +1,575 @@
 # SmartTAR STAR
 
-SmartTAR STAR is a simple Windows GUI tool for creating, verifying, and extracting transparent `.star` archives.
+## SmartTAR STAR Fix 13 RC5 – Feature Summary 
 
-A `.star` archive is a standard TAR outer container with this internal structure:
+## Core concept 
 
-```text
-manifest.json
-blocks/
-```
+SmartTAR STAR is a Windows GUI archiver built on top of the system tar.exe. 
+It creates a custom transparent container with the .star extension. 
 
-Internal blocks are compressed according to the selected compression mode. Because the outer container is a normal TAR archive, the archive can be inspected or recovered manually with `tar.exe` if needed.
+A .star file is an outer TAR container with this structure: 
 
-## Current version
+manifest.json 
+blocks/ 
+  000001_structure.tar 
+  000002_stored.tar 
+  000003_compressible.tar.xz 
 
-Recommended version:
+The archive is not a black box. The outer .star container can also be inspected  
+manually with tar.exe. 
 
-```text
-SmartTAR STAR Fix 13 RC5
-```
+## Main features 
 
-Fix 12 RC6 highlights:
+### 1. Transparent .star container 
 
-- safe-path archive creation using a dedicated SmartTAR work folder,
-- internal file blocks are created from temporary hardlink stages,
-- hardlinks avoid full data copy when the safe work folder is on the same drive,
-- automatic fallback to `Copy-Item` if hardlink creation is unavailable,
-- final `.star` archive is created in the safe work folder first and then moved to the requested destination,
-- avoids Windows `tar.exe` / `bsdtar` path error `GetVolumePathName failed: 123`,
-- improved reliability with localized paths, spaced paths, user-profile paths and temporary folders,
-- safe extraction and verification use a safe working copy of the selected archive,
-- automatic temporary folder cleanup after operations,
-- extraction target is a parent folder,
-- optional salvage mode can skip broken internal blocks and extract all readable blocks,
-- administrator mode is not required and is not recommended by default.
+The archive uses the .star extension and contains: 
 
-## Repository structure
+- manifest.json 
+- blocks/ 
 
-```text
-SmartTAR/
-├─ src/
-│  └─ SmartTAR.ps1
-├─ docs/
-│  ├─ FORMAT.md
-│  └─ BUILD_EXE.md
-├─ release/
-│  └─ README.md
-├─ CHANGELOG.md
-├─ CONTRIBUTING.md
-├─ LICENSE
-├─ README.md
-├─ RELEASE_CHECKLIST.md
-├─ SECURITY.md
-├─ TODO.md
-└─ VERSION
-```
+Advantages: 
 
-## Source code
+- readable structure, 
+- easier diagnostics, 
+- manual inspection is possible, 
+- block-based model instead of one opaque stream. 
 
-The main source file should be stored as:
+### 2. Block-based archive model 
 
-```text
-src/SmartTAR.ps1
-```
+Data is not stored as a single monolithic archive, but as internal blocks. 
 
-For GitHub, use the stable source filename `src/SmartTAR.ps1`. Versioned filenames can be used for release assets if desired.
+Example in Hybrid mode: 
 
-## Build EXE
+000001_structure.tar 
+000002_stored.tar 
+000003_compressible.tar.xz 
 
-Recommended build instructions are available in:
+Each block has its own manifest entry: 
 
-```text
-docs/BUILD_EXE.md
-```
+- id 
+- group 
+- path 
+- compression 
+- method 
+- fileCount 
+- sourceBytes 
+- sizeBytes 
+- sha256 
+- reason 
 
-## Temporary folder and safe work folder
+### 3. manifest.json 
 
-SmartTAR uses a safe temporary working folder during archive creation, extraction and verification.
+Every archive contains a metadata manifest. 
 
-The safe work folder is created in a writable location such as:
+The manifest contains, for example: 
 
-```text
-C:\SmartTAR_Temp
-```
+- format 
+- toolVersion 
+- createdUtc 
+- compressionMode 
+- sourceName 
+- sourceType 
+- sourceBytes 
+- rootRule 
+- creationMode 
+- planning 
+- capabilities 
+- sourceProfile 
+- groupStageDiagnostics 
+- blocks 
 
-or, when appropriate:
+This allows the archive to describe: 
 
-```text
-%PUBLIC%\SmartTAR_Temp
-```
+- how the archive was created, 
+- which source was archived, 
+- which blocks are included, 
+- which compression method each block uses, 
+- which SHA-256 hashes belong to each block, 
+- whether group-stage succeeded or RC6 fallback was used. 
 
-This is intentional. It avoids Windows `tar.exe` / `bsdtar` issues with mapped drives, Desktop folders, OneDrive-managed folders, protected paths, localized user-profile paths, spaces in paths and paths containing non-ASCII characters.
+### 4. Root-preserving extraction 
 
-Temporary operation folders are removed automatically after each operation.
+The archive stores the original source root name using: 
 
-## How RC6 avoids full staging copies
+- sourceName 
+- sourceType 
 
-SmartTAR STAR Fix 12 RC6 creates temporary hardlink stages for internal file blocks.
+During extraction, the .star file name is not authoritative. The manifest  
+decides the extraction root. 
 
-This means:
+Example: 
 
-- file data is not fully copied when hardlinks are available,
-- the staged file tree gives `tar.exe` clean and simple relative paths,
-- internal blocks can still preserve the intended archive layout,
-- if hardlinks cannot be created, SmartTAR falls back to `Copy-Item` for compatibility.
+Archive file name: 
 
-## Archive design
+My_backup.star 
 
-A `.star` archive is a standard TAR file containing a JSON manifest and one or more internal data blocks:
+Manifest contains: 
+sourceName = "XviD4PSP 5" 
 
-```text
-archive.star
-├─ manifest.json
-└─ blocks/
-   ├─ 000001_structure.tar
-   ├─ 000002_compressible.tar.xz
-   ├─ 000003_diskimage.tar.zst
-   └─ ...
-```
+Extraction creates: 
+XviD4PSP 5 
+Renaming the .star file does not change the extraction root. 
 
-The `manifest.json` file stores metadata such as:
+## Compression modes 
 
-- archive format version,
-- source name and source type,
-- compression mode,
-- block list,
-- block compression method,
-- original source size,
-- internal block size,
-- SHA-256 hash for each block.
+### 1. Hybrid 
 
-## Compression modes
+Default mode. 
 
-SmartTAR STAR supports these compression modes:
+Typical data mapping: 
 
-- **Hybrid** — recommended balanced mode using grouped blocks,
-- **Smart** — detailed grouping by file type,
-- **Solid** — auto-selected solid-style block planning,
-- **Smart XZ** — grouped mode focused on XZ/XZ9 compression,
-- **Store** — TAR blocks without compression.
+compressible -> XZ9 
+diskimage    -> ZSTD19 
+stored       -> STORE 
 
-Available compression methods depend on the local Windows `tar.exe` / `bsdtar` capabilities.
+Practical example: 
 
-## Verification
+000001_structure.tar 
+000002_stored.tar 
+000003_compressible.tar.xz 
 
-The verify operation checks every internal block independently:
+Recommended as the general-purpose mode. 
 
-- outer TAR readability,
-- `manifest.json` presence and validity,
-- internal block presence,
-- internal block TAR readability,
-- SHA-256 hash match for each block.
+### 2. Smart 
 
-## Extraction
+More detailed grouping by data type: 
 
-Extraction restores the archived root into the selected parent folder.
+- text 
+- binary 
+- executable 
+- diskimage 
+- media 
+- archives 
+- unknown 
 
-SmartTAR performs safety checks before extracting internal blocks, including:
+Example mapping: 
 
-- rejecting absolute paths,
-- rejecting drive-letter paths,
-- rejecting path traversal entries such as `../`,
-- verifying block hashes before extraction.
+text       -> XZ 
+binary     -> ZSTD 
+executable -> ZSTD 
+diskimage  -> ZSTD 
+media      -> STORE 
+archives   -> STORE 
+unknown    -> XZ 
 
-## Salvage mode
+### 3. Solid 
 
-Salvage mode is optional.
+Automatically chooses one main compression method based on the source profile. 
+Uses one group: 
 
-When salvage mode is enabled, SmartTAR skips broken or unreadable internal blocks and extracts all readable blocks. A report is generated with the list of skipped blocks and reasons.
+solid 
 
-This can be useful when an archive is partially damaged but some internal blocks remain readable.
+### 4. Smart XZ 
 
-## Manual recovery
+Uses XZ for most groups except data that usually should not be recompressed. 
 
-Because `.star` is based on standard TAR containers, manual recovery is possible.
+### 5. Store 
 
-Extract the outer container:
+Creates TAR blocks without compression. 
 
-```powershell
-tar.exe -xf archive.star -C outer
-```
+Useful for: 
 
-Inspect the manifest:
+- already compressed data, 
+- fast packing, 
+- diagnostics. 
 
-```text
-outer/manifest.json
-```
+## Supported compression methods 
 
-Extract a readable internal block manually:
+SmartTAR tests the capabilities of the available tar.exe. 
 
-```powershell
-tar.exe -xf outer/blocks/000002_compressible.tar.xz -C restored
-```
+Supported methods: 
 
-If a tool does not recognize the `.star` extension, rename the file to `.tar` and inspect it as a normal TAR archive.
+- STORE 
+- GZIP 
+- BZIP2 
+- XZ 
+- XZ9 
+- ZSTD19 
 
-## Administrator mode
+Current main methods: 
 
-Running SmartTAR as administrator is not required and is not recommended by default.
+XZ9     -> compressible/text-like data 
+ZSTD19  -> binary/executable/disk-image-like data 
+STORE   -> media/archive-like data 
 
-Elevated processes may not see the same mapped drives as the normal user session, which can make source or destination paths appear unavailable.
+# Group-stage architecture 
 
-## License
+## Main change compared with RC6 
 
-MIT License. See `LICENSE`.
+Older RC6 builds created multiple chunk blocks: 
+
+compressible_p001 
+compressible_p002 
+... 
+compressible_p031 
+
+The RC5 branch prefers: 
+
+compressible -> one group-stage block 
+
+For example: 
+
+000003_compressible.tar.xz 
+
+Advantages: 
+
+- fewer blocks, 
+- smaller manifest, 
+- less TAR overhead, 
+- better compression, 
+- faster verification, 
+- cleaner archive structure. 
+
+## How group-stage works 
+
+For each data group, SmartTAR creates a temporary stage folder. 
+
+Files are not copied into the stage by default. They are linked through  
+hardlinks: 
+
+original file -> hardlink inside stage 
+
+Then tar.exe is called as: 
+
+tar.exe ... -C stage . 
+
+Advantages: 
+
+- tar.exe does not receive a long file argument list, 
+- tar.exe does not receive a file list, 
+- tar.exe works with a simple safe stage path. 
+
+# Hardlink stage 
+
+## No double I/O 
+
+Group-stage primarily uses hardlinks. 
+
+This means: 
+
+- no full copy of the data is created, 
+- no second content cache is created, 
+- tar.exe reads the same physical file through the stage path. 
+
+Advantages: 
+
+- faster than copying, 
+- more storage-efficient, 
+- suitable for larger archives. 
+
+## Literal hardlink paths 
+
+RC4 fixed issues with file names such as: 
+
+[01].py 
+
+PowerShell can interpret [ and ] as wildcard characters. 
+
+The current RC5 build contains the function: 
+
+New-HardLinkLiteral 
+
+This function: 
+
+- uses Test-Path -LiteralPath, 
+- escapes wildcard characters, 
+- creates directories through .NET, 
+- if New-Item -ItemType HardLink fails, it tries a fallback through: 
+
+cmd.exe /c mklink /H 
+
+This helps with names such as: 
+
+- [01].py 
+- file (copy).txt 
+- paths with spaces 
+- paths with diacritics 
+
+# RC6 fallback 
+
+If group-stage fails, SmartTAR does not fail the entire archive creation. 
+
+It uses emergency fallback: 
+
+RC6 chunked block creation 
+
+For example: 
+
+compressible_p001 
+compressible_p002 
+... 
+
+Fallback should now be rare, but it is still useful as a safety mechanism. 
+
+It may happen when: 
+
+- a file is deleted during archiving, 
+- a file is locked, 
+- the filesystem does not support hardlinks, 
+- source and workroot are not on the same volume, 
+- tar.exe fails on an edge case. 
+
+# Group-stage diagnostics 
+
+RC5 writes the following section into the manifest and reports: 
+
+Group-stage diagnostics: 
+
+Example: 
+
+compressible: group-stage-ok, files=2915, source=402.18 MB, message=Created as  
+one RC5 group-stage block. XZ directory timestamps normalized. 
+
+Fallback example: 
+
+compressible: fallback-rc6-chunked, message=Group-stage failed. ... 
+
+This makes it clear: 
+
+- which group succeeded, 
+- which group used fallback, 
+- why fallback was used, 
+- how many files were in the group, 
+- how large the source data for the group was. 
+
+# SHA-256 verification 
+
+Each internal block has a SHA-256 hash. 
+
+The manifest contains: 
+
+sha256 
+
+During VERIFY, SmartTAR checks: 
+
+- whether each block exists, 
+- whether each block can be listed with tar -tf, 
+- whether each block SHA-256 hash matches. 
+
+The report then shows: 
+
+Archive verification OK 
+Blocks OK: ... 
+Blocks failed: ... 
+
+# VERIFY mode 
+
+The GUI contains a button: 
+
+VERIFY 
+
+This verifies the archive without extracting it. 
+
+It checks: 
+
+- outer .star container, 
+- manifest.json, 
+- blocks, 
+- SHA-256 hashes, 
+- whether TAR blocks can be listed. 
+
+The verification report shows: 
+
+- Format 
+- Tool 
+- Version 
+- Mode 
+- Creation mode 
+- Blocks 
+- Blocks OK 
+- Blocks failed 
+- Archive size 
+- Group-stage diagnostics 
+- OK/FAIL block list 
+
+# Salvage mode 
+
+The GUI contains the option: 
+
+Salvage mode (Ignore broken blocks) 
+
+During extraction, this mode allows damaged blocks to be skipped and readable  
+parts of the archive to be recovered. 
+
+Salvage was more important when archives contained many chunk blocks. With  
+group-stage architecture it is less central, but still useful. 
+
+Example use case: 
+
+stored block is intact 
+compressible block is damaged 
+
+It is also useful when an archive was created through RC6 fallback with multiple 
+chunk blocks. 
+
+# Extraction safety 
+
+
+## Path validation 
+
+During extraction, SmartTAR checks that paths inside blocks are safe. 
+
+Blocks are listed through: 
+
+tar -tf 
+
+SmartTAR checks for: 
+
+- no absolute paths, 
+- no paths like C:\..., 
+- no .. segments, 
+- no path traversal attempts. 
+
+## Overwrite warning 
+
+Before extraction, SmartTAR reads the manifest and determines the real target  
+root. 
+
+If the target folder already exists, SmartTAR shows a warning: 
+
+Target already exists. 
+Existing files/folders may be merged or overwritten. 
+Continue? 
+
+The user can choose: 
+
+Yes -> continue 
+No  -> cancel extraction 
+
+The check is based on sourceName from the manifest, not on the .star file name. 
+
+# XZ deterministic stage metadata 
+
+RC5 adds targeted stabilization for XZ blocks. 
+
+The issue was that repeatedly packing the same source could produce slightly  
+different .tar.xz sizes because newly created stage directories had current  
+timestamps. 
+
+RC5 sets timestamps only for directories inside XZ stages to a stable value: 
+
+2000-01-01 00:00:00 
+
+Files are not modified. 
+
+Applies only to: 
+
+- XZ 
+- XZ9 
+
+Does not apply to: 
+
+- STORE 
+- GZIP 
+- BZIP2 
+- ZSTD 
+
+The report then shows: 
+
+XZ directory timestamps normalized. 
+
+# File timestamp preservation 
+
+Because SmartTAR uses hardlinks: 
+
+original file -> hardlink inside stage 
+
+file metadata, especially LastWriteTime, should be preserved through the TAR  
+layer. 
+
+XZ compression does not remove file timestamps because: 
+
+.tar.xz = TAR metadata + XZ compression 
+
+Realistically expected to be preserved: 
+
+- content, 
+- path, 
+- size, 
+- LastWriteTime / modification time. 
+
+Not guaranteed as full NTFS backup metadata: 
+
+- CreationTime, 
+- LastAccessTime, 
+- ACL, 
+- owner, 
+- alternate data streams, 
+- reparse points. 
+
+# Temporary folder cleanup 
+
+SmartTAR creates a safe working directory: 
+
+SmartTAR_Temp 
+
+  smarttar_create_xxx 
+  smarttar_extract_xxx 
+  smarttar_verify_xxx 
+
+After completion it removes: 
+
+smarttar_* work folder 
+
+If the root folder is empty, it also removes: 
+
+SmartTAR_Temp 
+
+Cleanup uses retry logic and a fallback through: 
+
+cmd.exe /c rmdir /s /q 
+
+# Reports 
+
+After operations, SmartTAR creates text reports. 
+
+Examples: 
+
+archive.star.create_report.20260605_... 
+archive.star.verify_report.20260605_... 
+archive.star.extract_report.20260605_... 
+
+The report contains: 
+
+- Source size 
+- Archive size 
+- Ratio 
+- Saved 
+- Verify status 
+- Blocks 
+- Group-stage diagnostics 
+- OK/FAIL blocks 
+
+# Practical results after RC5 
+
+On a test where earlier builds created many blocks: 
+
+RC2/RC3: 
+Blocks: 33 
+Archive size: 149.06 MB 
+
+After RC4/RC5: 
+Blocks: 3 
+Archive size: about 141.89 MB 
+
+On a smaller test: 
+
+Source size: 102.60 MB 
+Archive size: 13.75 MB 
+Blocks: 2 
+compressible: group-stage-ok 
+XZ directory timestamps normalized 
+
+# One-sentence summary 
+
+SmartTAR STAR RC5 is a transparent block-based Windows archiver built on  
+tar.exe. It creates .star containers with a manifest, SHA-256 verification,  
+smart data grouping, XZ/ZSTD/STORE compression based on content type,  
+group-stage hardlink architecture, RC6 fallback, salvage extraction, safe  
+root-preserving extraction, and targeted XZ stage metadata stabilization. 
+
+Current status: 
+
+RC6 = last stable old chunk architecture 
+RC4 = first truly successful group-stage architecture 
+RC5 = current best candidate for the new stable branch 
