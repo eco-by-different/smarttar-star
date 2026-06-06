@@ -1308,7 +1308,11 @@ function Format-GroupDiagnostics {
 }
 
 function Get-SmartArchivePlannedExtractionTarget {
-    param([string]$TarPath, [string]$ArchivePath, [string]$DestinationParent)
+    param(
+        [string]$TarPath,
+        [string]$ArchivePath,
+        [string]$DestinationParent
+    )
 
     $work = New-SafeWorkRoot 'precheck' $ArchivePath
     $outer = Join-Path $work 'outer'
@@ -1320,17 +1324,26 @@ function Get-SmartArchivePlannedExtractionTarget {
 
         $manifest = Read-OuterManifest $outer
         $rootName = Get-ArchiveRootName $manifest $ArchivePath
+        $sourceType = [string]$manifest.sourceType
 
-        if ([string]$manifest.sourceType -eq 'Folder' -and -not (Test-Blank $rootName)) {
+        if ($sourceType -eq 'Folder' -and -not (Test-Blank $rootName)) {
             return [pscustomobject]@{
-                SourceType = [string]$manifest.sourceType
+                SourceType = $sourceType
+                SourceName = [string]$rootName
+                TargetPath = (Join-Path $DestinationParent $rootName)
+            }
+        }
+
+        if ($sourceType -eq 'File' -and -not (Test-Blank $rootName) -and $rootName -ne '.') {
+            return [pscustomobject]@{
+                SourceType = $sourceType
                 SourceName = [string]$rootName
                 TargetPath = (Join-Path $DestinationParent $rootName)
             }
         }
 
         return [pscustomobject]@{
-            SourceType = [string]$manifest.sourceType
+            SourceType = $sourceType
             SourceName = [string]$rootName
             TargetPath = $DestinationParent
         }
@@ -2281,21 +2294,66 @@ function Execute-Compress {
 
     if (-not (Test-SelectedInputReady 'compression')) { return }
 
-    $targetPath = Ensure-StarExtension ($txtTarget.Text.Trim('"'))
+    $targetText = $txtTarget.Text.Trim('"')
+    if (Test-Blank $targetText) {
+        Show-Message 'Select destination.' | Out-Null
+        return
+    }
+
+    $targetPath = ''
+
+    if (Test-Path -LiteralPath $targetText -PathType Container) {
+        if ($script:selectedType -eq 'Folder') {
+            $baseName = Get-DefaultArchiveBaseName $script:selectedPath $script:selectedType
+
+            if (Test-Blank $baseName) {
+                $baseName = "archive_$(Get-Date -Format yyyyMMdd_HHmmss)"
+            }
+
+            $targetPath = Join-Path $targetText ($baseName + '.star')
+        }
+        else {
+            $sourceLeaf = Split-Path -Leaf $script:selectedPath
+
+            if (Test-Blank $sourceLeaf) {
+                $sourceLeaf = "archive_$(Get-Date -Format yyyyMMdd_HHmmss)"
+            }
+
+            $targetPath = Join-Path $targetText ($sourceLeaf + '.star')
+        }
+    }
+    else {
+        $targetPath = Ensure-StarExtension $targetText
+    }
+
     if (Test-Blank $targetPath) {
         Show-Message 'Select destination.' | Out-Null
         return
     }
 
     $targetDir = [System.IO.Path]::GetDirectoryName($targetPath)
+
     if (Test-Blank $targetDir) {
         $targetDir = $scriptDir
         $targetPath = Join-Path $targetDir ([System.IO.Path]::GetFileName($targetPath))
     }
 
+    try {
+        $inputFull = [System.IO.Path]::GetFullPath($script:selectedPath)
+        $targetFull = [System.IO.Path]::GetFullPath($targetPath)
+
+        if ($inputFull -ieq $targetFull) {
+            $targetPath = $targetPath + '.star'
+        }
+    }
+    catch {}
+
     if (Test-Path -LiteralPath $targetPath) {
         $confirm = Show-Message "Target archive already exists:`r`n$targetPath`r`n`r`nOverwrite?" 'Overwrite archive?' ([System.Windows.Forms.MessageBoxIcon]::Warning) ([System.Windows.Forms.MessageBoxButtons]::YesNo)
-        if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+        if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
+            return
+        }
     }
 
     Start-WorkerOperation 'Compress' $script:selectedPath $targetPath (Get-SelectedCompressionMode) $false
