@@ -1,5 +1,5 @@
 # ============================================================================
-# SmartTAR STAR v1.0
+# SmartTAR - STAR v1.0
 # Windows PowerShell GUI archiver using Windows tar.exe / bsdtar
 #
 # Stable 1.0 features:
