@@ -4,17 +4,16 @@
 
 Windows PowerShell GUI archiver using Windows tar.exe / bsdtar
 
-RC5 targeted change:
+### RC5 targeted change:
  - Keeps RC4 literal hardlink path fix for names like [01].py.
  - Normalizes DIRECTORY timestamps only for XZ TAR blocks before compression.
  - Does not change file timestamps; hardlinked files keep original LastWriteTime.
  - Does not normalize STORE / GZIP / BZIP2 / ZSTD blocks.
 
-Goal:
- Reduce repeated-run size drift for .tar.xz blocks caused by fresh stage
- directory timestamps and the TAR entry for directories / '.'.
+### Goal:
+ Reduce repeated-run size drift for .tar.xz blocks caused by fresh stage directory timestamps and the TAR entry for directories / '.'.
 
-Preserved features:
+### Preserved features:
  - .star outer TAR container.
  - manifest.json with block metadata and SHA-256.
  - One preferred block per data type/group.
