@@ -3,7 +3,7 @@
 
 # SmartTAR - STAR
 
-**SmartTAR STAR** is an experimental Windows PowerShell GUI archiver built on top of the native Windows `tar.exe` (bsdtar) engine.
+**SmartTAR - STAR** is an experimental Windows PowerShell GUI archiver built on top of the native Windows `tar.exe` (bsdtar) engine.
 
 It creates transparent `.star` archives containing:
 - An outer TAR container
