@@ -30,6 +30,7 @@ SmartTAR focuses on **transparent recovery, human-readable archive structure, an
   - `Smart` — Granular file-type grouping
   - `Solid` — Single auto-selected compression block
   - `Smart XZ` — Granular grouping optimized for XZ9 compression
+  - `Store` — No internal compression.
 - **Dynamic Detection:** Automatic capability testing for available TAR compression algorithms.
 - **Integrity Validation:** Strict SHA-256 hashing for all internal blocks.
 - **Safety First:** Path-traversal protection and extraction safety checks.
