@@ -6,8 +6,8 @@
 #   - STAR outer TAR container.
 #   - manifest.json with SHA-256 block metadata.
 #   - Smart grouped block planning.
-#   - RC5 group hardlink stage.
-#   - RC6 chunk fallback when group-stage fails.
+#   - Group hardlink staging for reliable block creation.
+#   - Chunk fallback when group-stage creation fails.
 #   - XZ directory timestamp normalization.
 #   - Responsive GUI using hidden worker process.
 #   - Worker temp root with worker_config.json, status.txt, result.json, report.txt.
@@ -1089,19 +1089,19 @@ function Build-Blocks {
         }
 
         if ($ok -and (Test-Path -LiteralPath $blockPath)) {
-            $diagMessage = 'Created as one RC5 group-stage block.'
+            $diagMessage = 'Created as one group-stage block.'
             if ([string]$group.Method.Algorithm -eq 'xz') {
                 $diagMessage += ' XZ directory timestamps normalized.'
             }
 
             Add-GroupDiagnostic $safeGroup 'group-stage-ok' $diagMessage ([int]$group.FileCount) ([int64]$group.Bytes)
-            Add-BlockManifestItem ([ref]$blocks) $id $safeGroup $blockPath $group.Method ([string]$group.Reason + ' RC5 group-stage block.') ([int]$group.FileCount) 0 ([int64]$group.Bytes)
+            Add-BlockManifestItem ([ref]$blocks) $id $safeGroup $blockPath $group.Method ([string]$group.Reason + ' group-stage block.') ([int]$group.FileCount) 0 ([int64]$group.Bytes)
             $index++
             continue
         }
 
         Add-GroupDiagnostic $safeGroup 'fallback-rc6-chunked' ('Group-stage failed. ' + $err) ([int]$group.FileCount) ([int64]$group.Bytes)
-        Set-AppStatus "Group stage failed for $safeGroup. Falling back to RC6 chunked blocks..." ([System.Drawing.Color]::DarkOrange)
+        Set-AppStatus "Group stage failed for $safeGroup. Falling back to chunked blocks..." ([System.Drawing.Color]::DarkOrange)
 
         $chunks = Split-FileChunks -Files $group.Files
         $part = 1
@@ -1135,7 +1135,7 @@ function Build-Blocks {
             $sourceBytes = [int64]0
             foreach ($file in $chunkFiles) { $sourceBytes += [int64]$file.Bytes }
 
-            $reason = ([string]$group.Reason) + " RC5 group-stage failed, RC6 chunk fallback used. Group-stage error: $err"
+            $reason = ([string]$group.Reason) + " Group-stage failed, chunk fallback used. Group-stage error: $err"
             Add-BlockManifestItem ([ref]$blocks) $id $fallbackGroup $blockPath $group.Method $reason ([int]$chunkFiles.Count) 0 $sourceBytes
             $index++
             $part++
@@ -2074,7 +2074,7 @@ function Show-Message {
 }
 
 $form = New-UiObject 'System.Windows.Forms.Form' @{
-    Text            = 'SmartTAR STAR v1.0    ..:: Copyright (c) 2026 eco-by-different ::..'
+    Text            = 'SmartTAR - STAR v1.0  ..:: Copyright (c) 2026 eco-by-different ::..'
     ClientSize      = (New-Size 505 490)
     StartPosition   = 'CenterScreen'
     BackColor       = $cBg
@@ -2116,7 +2116,7 @@ $cmbMode = New-UiObject 'System.Windows.Forms.ComboBox' @{
 [void]$cmbMode.Items.Add('Store - grouped TAR blocks without compression')
 $cmbMode.SelectedIndex = 0
 
-$lblInfo = New-EcoLabel 'Fix 13 RC5: responsive worker + temp verify result/report enabled.' 20 252 465 20 $fItalic ([System.Drawing.Color]::DimGray)
+$lblInfo = New-EcoLabel 'Stable worker mode with safe verification reports.' 20 252 465 20 $fItalic ([System.Drawing.Color]::DimGray)
 $btnCompress = New-EcoButton 'COMPRESS' 20 287 150 42 $fBold ([System.Drawing.Color]::SeaGreen) $cButtonText
 $btnExtract  = New-EcoButton 'EXTRACT' 177 287 150 42 $fBold ([System.Drawing.Color]::SteelBlue) $cButtonText
 $btnVerify   = New-EcoButton 'VERIFY' 334 287 151 42 $fBold ([System.Drawing.Color]::DarkSlateGray) $cButtonText
