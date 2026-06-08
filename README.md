@@ -14,8 +14,7 @@ It creates transparent `.star` archives containing:
 
 SmartTAR focuses on **transparent recovery, human-readable archive structure, and automatic compression planning** instead of using a proprietary black-box format.
 
-> Current status: **Beta / Experimental**  
-> Documented version: **SmartTAR STAR 1.0 Beta 1 Fix 2 XZ9 XZStable - Clean**
+> Current status: v1.0
 
 ---
 
