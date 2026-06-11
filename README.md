@@ -25,6 +25,12 @@ Instead of blindly compressing everything the same way, SmartTAR separates data 
 
 ---
 
+## Screenshot
+
+![WinZSTD screenshot](docs/images/smarttar-gui.png)
+
+---
+
 ## Current version
 
 ```text
