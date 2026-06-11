@@ -1,7 +1,7 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/winzstd)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/winzstd)
 
-# SmartTAR STAR v1.1
+# SmartTAR - STAR v1.1
 
 SmartTAR STAR is a lightweight Windows PowerShell GUI archiver built on top of Windows `tar.exe` / bsdtar.
 
@@ -11,7 +11,7 @@ Recommended release file: SmartTAR 1.1.ps1
 
 ---
 
-## What is SmartTAR STAR?
+## What is SmartTAR - STAR?
 
 SmartTAR STAR creates `.star` archives using a grouped block model.
 
