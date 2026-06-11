@@ -1,3 +1,26 @@
+# SmartTAR - STAR v1.1
+
+## Changed
+- Improved CREATE staging policy.
+- CREATE now prefers source-volume staging to preserve hardlink support.
+- Added group-stage copy fallback before chunked fallback.
+- Chunked block fallback is now used only as a last-resort path.
+- VERIFY now uses standard SmartTAR temp storage for better read-only and virtual media handling.
+- Improved report path handling and fallback behavior.
+- Cleaned internal versioning to STAR v1.1.
+
+## Removed
+- Removed legacy SARC handling.
+- Removed old beta/fix/rc labels and diagnostic wording.
+- Reduced supported compression methods to the stable set: STORE, XZ9, ZSTD19.
+
+## Notes
+- This version is the new stable baseline.
+
+---
+
+---
+
 # SmartTAR - STAR v1.0
 
 **SmartTAR - STAR** is a Windows PowerShell GUI archiver built around the Windows `tar.exe` / bsdtar engine.  
