@@ -1,9 +1,9 @@
 # SmartTAR STAR Archive Format
 
 **Document:** `archive-format`  
-**Project:** SmartTAR STAR 1.0 Beta 1  
-**Build family:** Root Preserving Smart Hybrid  
-**Current reference implementation:** `root-preserving-smart-hybrid-v8`  
+**Project:** SmartTAR STAR v1.2.0  
+**Build family:** SmartTAR STAR v1.2 stable  
+**Current reference implementation:** `SmartTAR 1.2.ps1`  
 **Container engine:** Windows `tar.exe` / `bsdtar`  
 **Primary extension:** `.star`
 
@@ -11,23 +11,27 @@
 
 ## 1. Purpose
 
-SmartTAR STAR is a transparent archive format built on top of standard TAR containers.
+SmartTAR STAR is a transparent archive container format built on top of standard TAR-compatible building blocks.
+
+SmartTAR is not a custom compression engine. It is a smart PowerShell wrapper and STAR container orchestrator built on top of Windows `tar.exe` / `bsdtar`.
 
 The format is designed to be:
 
 - manually recoverable with standard `tar.exe`,
 - readable without a proprietary binary parser,
 - structured around a JSON manifest,
-- able to contain one or more internal TAR/TAR.XZ blocks,
+- able to contain one or more internal TAR / TAR.XZ / TAR.ZST blocks,
 - root-folder preserving,
 - safe against path traversal during extraction,
-- suitable for Smart / Hybrid / Solid / Store compression strategies.
+- suitable for Balanced / Smart / Solid / Store compression profiles,
+- block-verifiable using SHA256 hashes,
+- salvage-friendly because payload data is split into independent internal blocks.
 
-The most important design rule is:
+The most important design rule remains:
 
 > **No folder-name deduplication.**  
 > The selected root folder is preserved exactly.  
-> Every internal block contains the selected root prefix.
+> Same-name child folders are valid content and must not be removed.
 
 ---
 
@@ -37,12 +41,6 @@ Recommended extension:
 
 ```text
 .star
-```
-
-Legacy or compatible extension:
-
-```text
-.sarc.tar
 ```
 
 A `.star` file is internally a standard TAR archive. Therefore, if needed, a `.star` file can be inspected manually using:
@@ -57,30 +55,41 @@ or extracted manually using:
 tar -xf archive.star -C outer
 ```
 
+After extracting the outer container, the internal block files can be inspected or extracted individually with `tar.exe`.
+
 ---
 
 ## 3. Outer container layout
 
-A STAR archive is a TAR file containing at minimum:
+A STAR archive is a plain outer TAR container containing at minimum:
 
 ```text
 manifest.json
 blocks/
 ```
 
-Example outer structure:
+Example outer structure for the Smart profile:
 
 ```text
 archive.star
 ├─ manifest.json
 └─ blocks
-   ├─ 000001_compressible.tar.xz
-   ├─ 000002_stored.tar
-   └─ 000003_text.tar.xz
+   ├─ 000001_structure.tar.xz
+   ├─ 000002_text.tar.xz
+   ├─ 000003_unknown.tar.xz
+   ├─ 000004_archives.tar
+   └─ 000005_binary.tar.xz
 ```
 
-The outer TAR container is always created as a plain TAR container.
-Compression is handled inside the block files.
+The outer TAR container itself is not compressed. Compression is handled inside the internal block files.
+
+Each internal block remains a standard tar-compatible unit:
+
+```text
+.tar
+.tar.xz
+.tar.zst
+```
 
 ---
 
@@ -95,12 +104,18 @@ manifest.json
 The manifest describes:
 
 - archive format,
-- tool version,
-- source root name,
-- source type,
-- compression mode,
-- root preservation rule,
-- deterministic timestamp policy,
+- format version,
+- SmartTAR tool version,
+- backend engine,
+- STAR model name,
+- selected compression mode,
+- selected compression profile,
+- compression preference,
+- content analysis scope,
+- source name and source type,
+- source size,
+- source profile summary,
+- adaptive analysis diagnostics,
 - block list,
 - SHA256 hash for each block.
 
@@ -113,47 +128,76 @@ The manifest describes:
   "format": "STAR",
   "formatVersion": 1,
   "tool": "SmartTAR",
-  "toolVersion": "root-preserving-smart-hybrid-v8",
-  "createdUtc": "2026-06-04T00:00:00Z",
+  "toolVersion": "1.2",
+  "createdUtc": "2026-06-12T00:00:00Z",
   "engine": "Windows tar.exe",
-  "mode": "Hybrid",
-  "sourceName": "avinaptic-win64-20231012",
+  "model": "STAR v1.2",
+  "compressionMode": "Smart",
+  "compressionProfile": "Smart - max compression",
+  "compressionPreference": "MaxCompression",
+  "analysisScope": "FullAnalyze",
+  "sourceName": "example-folder",
   "sourceType": "Folder",
-  "sourceBytes": 123456789,
-  "rootRule": "No deduplication. Every block contains the selected root prefix.",
-  "deterministicMetadata": {
+  "sourceBytes": 435542769,
+  "sourceProfile": {
+    "fileCount": 3006,
+    "dirCount": 232
+  },
+  "adaptiveDiagnostics": {
     "enabled": true,
-    "timestampUtc": "2000-01-01T00:00:00Z",
-    "scope": "XZ9 blocks only"
+    "analysisScope": "FullAnalyze",
+    "unknownSeen": 3006,
+    "unknownBytes": 435542769,
+    "movedToText": 2488,
+    "movedToBinary": 419,
+    "movedToArchives": 89,
+    "stayedUnknown": 10
   },
   "blocks": [
     {
       "id": "000001",
-      "group": "compressible",
-      "path": "blocks/000001_compressible.tar.xz",
+      "group": "structure",
+      "path": "blocks/000001_structure.tar.xz",
       "method": "xz9",
-      "compression": "xz",
-      "fileCount": 25,
-      "dirCount": 4,
-      "sourceBytes": 1234567,
-      "sizeBytes": 456789,
+      "display": "XZ9",
+      "algorithm": "xz",
+      "fileCount": 0,
+      "dirCount": 232,
+      "sourceBytes": 0,
+      "sizeBytes": 2524,
       "sha256": "0123456789abcdef..."
     },
     {
       "id": "000002",
-      "group": "stored",
-      "path": "blocks/000002_stored.tar",
-      "method": "store",
-      "compression": "store",
-      "fileCount": 3,
-      "dirCount": 4,
-      "sourceBytes": 987654,
-      "sizeBytes": 987999,
+      "group": "text",
+      "path": "blocks/000002_text.tar.xz",
+      "method": "xz9",
+      "display": "XZ9",
+      "algorithm": "xz",
+      "fileCount": 2488,
+      "dirCount": 0,
+      "sourceBytes": 25784422,
+      "sizeBytes": 3894740,
       "sha256": "abcdef0123456789..."
+    },
+    {
+      "id": "000004",
+      "group": "archives",
+      "path": "blocks/000004_archives.tar",
+      "method": "store",
+      "display": "STORE",
+      "algorithm": "store",
+      "fileCount": 89,
+      "dirCount": 0,
+      "sourceBytes": 12750684,
+      "sizeBytes": 12835328,
+      "sha256": "fedcba9876543210..."
     }
   ]
 }
 ```
+
+The exact shape of `sourceProfile` and `adaptiveDiagnostics` may evolve between builds, but the top-level manifest and block list are the primary compatibility contract.
 
 ---
 
@@ -166,21 +210,25 @@ The manifest describes:
 | `format` | string | Must be `STAR`. |
 | `formatVersion` | integer | Format version. Current value: `1`. |
 | `tool` | string | Tool name. Usually `SmartTAR`. |
-| `toolVersion` | string | Tool/build version. |
+| `toolVersion` | string | Tool version. Current stable value: `1.2`. |
 | `createdUtc` | string | Archive creation time in UTC. |
 | `engine` | string | Backend engine. Usually `Windows tar.exe`. |
-| `mode` | string | Compression mode used. |
+| `model` | string | STAR model name, e.g. `STAR v1.2`. |
+| `compressionMode` | string | Internal compression mode, e.g. `Smart`, `Balanced`, `Solid`, `Store`. |
+| `compressionProfile` | string | User-facing compression profile name. |
+| `compressionPreference` | string | Compression preference used by the mode, e.g. `Balanced` or `MaxCompression`. |
+| `analysisScope` | string | Content analysis scope, e.g. `None`, `UnknownOnly`, `FullAnalyze`. |
 | `sourceName` | string | Selected root file/folder name. |
 | `sourceType` | string | `Folder` or `File`. |
 | `sourceBytes` | integer | Original source size in bytes. |
-| `rootRule` | string | Root preservation rule text. |
 | `blocks` | array | Internal block list. |
 
 ### 6.2 Optional top-level fields
 
 | Field | Type | Description |
 |---|---:|---|
-| `deterministicMetadata` | object | Timestamp normalization policy. |
+| `sourceProfile` | object | Summary of source content. |
+| `adaptiveDiagnostics` | object | Content analysis diagnostics. |
 | `notes` | string/array | Human-readable notes. |
 | `compatibility` | object | Optional compatibility information. |
 | `manualRecovery` | array | Optional manual recovery commands. |
@@ -189,15 +237,16 @@ The manifest describes:
 
 ## 7. Block object fields
 
-Each block entry describes one internal TAR or TAR.XZ file.
+Each block entry describes one internal TAR, TAR.XZ, or TAR.ZST file.
 
 | Field | Type | Description |
 |---|---:|---|
 | `id` | string | Stable block ID, e.g. `000001`. |
-| `group` | string | Logical group name, e.g. `compressible`, `stored`, `text`. |
-| `path` | string | Relative path inside outer STAR archive. |
-| `method` | string | Method name, e.g. `xz9`, `store`. |
-| `compression` | string | Compression algorithm, e.g. `xz`, `store`. |
+| `group` | string | Logical group name, e.g. `structure`, `text`, `binary`, `archives`, `stored`. |
+| `path` | string | Relative path inside the outer STAR archive. |
+| `method` | string | Method name, e.g. `xz9`, `zstd19`, `store`. |
+| `display` | string | Human-readable method name, e.g. `XZ9`, `ZSTD19`, `STORE`. |
+| `algorithm` | string | Compression algorithm, e.g. `xz`, `zstd`, `store`. |
 | `fileCount` | integer | Number of files staged into the block. |
 | `dirCount` | integer | Number of directories staged into the block. |
 | `sourceBytes` | integer | Source bytes represented by the block. |
@@ -224,7 +273,7 @@ Z:\avinaptic-win64-20231012\avinaptic.cfg
 Z:\avinaptic-win64-20231012\avinaptic2.exe
 ```
 
-then every internal block must contain paths with the selected root prefix:
+then internal payload paths preserve the selected root prefix:
 
 ```text
 avinaptic-win64-20231012/avinaptic-win64-20231012/...
@@ -232,7 +281,7 @@ avinaptic-win64-20231012/avinaptic.cfg
 avinaptic-win64-20231012/avinaptic2.exe
 ```
 
-The following is invalid for root-preserving SmartTAR blocks:
+The following would be invalid for a root-preserving folder archive:
 
 ```text
 avinaptic.cfg
@@ -272,57 +321,97 @@ No folder-name deduplication is allowed.
 
 ---
 
-## 10. Compression modes
+## 10. Compression profiles
 
-### 10.1 Hybrid
+### 10.1 Balanced - mixed blocks
 
-Recommended default mode.
+Recommended default profile.
 
 Typical grouping:
 
 ```text
-compressible  -> XZ9
-stored        -> STORE
+compressible  → XZ9
+diskimage     → ZSTD19, if applicable
+stored        → STORE
 ```
 
-Media, archive-like files and disk images are usually stored. Text, config, binaries and unknown data are usually compressed.
+Known archive-like and media-like files are usually stored. Unknown files are analyzed only when needed.
 
-### 10.2 Smart
-
-Detailed grouping by file type:
+Analysis scope:
 
 ```text
-text
-binary
-executable
-diskimage
-media
-archives
+UnknownOnly
 ```
 
-Each group is stored in a separate internal block.
+---
 
-### 10.3 Smart XZ
+### 10.2 Smart - max compression
 
-Similar to Smart mode, but non-stored groups prefer XZ9.
+Maximum compression profile.
 
-### 10.4 Solid
+Smart performs full content analysis and uses XZ9 for compressible data.
 
-One root-preserving internal block.
+Typical grouping:
 
-Useful for maximum structure safety and simple recovery.
+```text
+structure → XZ9
+text      → XZ9
+unknown   → XZ9
+binary    → XZ9
+archives  → STORE
+```
 
-### 10.5 Store
+Analysis scope:
+
+```text
+FullAnalyze
+```
+
+---
+
+### 10.3 Solid - single block
+
+Single-block profile.
+
+Typical grouping:
+
+```text
+solid → one automatically selected method
+```
+
+The Solid profile is useful when a simple single data block is preferred. Depending on the source profile and available methods, the selected method may be XZ9 or ZSTD19.
+
+Analysis scope:
+
+```text
+UnknownOnly
+```
+
+---
+
+### 10.4 Store - no compression
 
 No internal compression.
 
-Useful for speed and maximum compatibility.
+Typical grouping:
+
+```text
+store → STORE
+```
+
+Useful for speed, reference tests, or data that should not be recompressed.
+
+Analysis scope:
+
+```text
+None
+```
 
 ---
 
 ## 11. Block compression methods
 
-### STORE block
+### 11.1 STORE block
 
 Extension:
 
@@ -336,7 +425,9 @@ Typical creation command:
 tar -cf block.tar -C stage .
 ```
 
-### XZ9 block
+---
+
+### 11.2 XZ9 block
 
 Extension:
 
@@ -350,46 +441,63 @@ Typical creation command:
 tar --options xz:compression-level=9 -cJf block.tar.xz -C stage .
 ```
 
-If XZ9 is not supported by the installed `tar.exe`, implementation may fall back to STORE.
+If XZ9 is not supported by the installed `tar.exe`, the implementation may fall back to another available method or STORE, depending on the block type.
 
 ---
 
-## 12. Timestamp policy
+### 11.3 ZSTD19 block
 
-The reference v8 implementation uses partial deterministic timestamp handling.
+Extension:
 
-### XZ9 blocks
+```text
+.tar.zst
+```
 
-XZ9 block stages may be normalized to:
+Typical creation command:
+
+```powershell
+tar --zstd --options zstd:compression-level=19 -cf block.tar.zst -C stage .
+```
+
+ZSTD19 is mainly useful as a speed-oriented high-compression option for selected block strategies, especially where XZ9 is not the best practical trade-off.
+
+---
+
+## 12. Structure block
+
+The directory structure block stores the directory skeleton of folder archives.
+
+In SmartTAR STAR v1.2.0, the structure block is compressed with XZ9 when available:
+
+```text
+000001_structure.tar.xz
+```
+
+If XZ9 structure block creation fails, the implementation safely falls back to STORE:
+
+```text
+000001_structure.tar
+```
+
+The structure block remains separate from payload blocks for clarity, verification, and salvage safety.
+
+---
+
+## 13. Timestamp policy
+
+SmartTAR may normalize selected staging metadata for compressed blocks to improve stable block behavior.
+
+The reference implementation uses a stable timestamp baseline for XZ-related staging behavior:
 
 ```text
 2000-01-01T00:00:00Z
 ```
 
-This improves deterministic behavior of compressed blocks.
-
-### STORE blocks
-
-STORE blocks may preserve natural timestamps, depending on `tar.exe` behavior and filesystem behavior.
-
-### Future recommended option
-
-A future version should expose a UI option:
-
-```text
-[ ] Deterministic timestamps for compressed blocks
-```
-
-Recommended modes:
-
-```text
-Preserve original timestamps
-Deterministic timestamps
-```
+Exact timestamp behavior may still depend on Windows `tar.exe`, filesystem behavior, and the selected block method.
 
 ---
 
-## 13. Archive creation algorithm
+## 14. Archive creation algorithm
 
 High-level algorithm:
 
@@ -397,14 +505,20 @@ High-level algorithm:
 1. Normalize selected source path.
 2. Determine selected root name from source path.
 3. Create temporary work directory.
-4. Create staging directories for selected mode.
-5. For every staged item, compute relative path from parent of selected root.
-6. Copy every staged file into the selected group stage with root prefix preserved.
-7. Create one block per non-empty group.
-8. Hash every block with SHA256.
-9. Write manifest.json.
-10. Create outer .star TAR container with manifest.json and blocks/.
-11. Clean temporary work directory.
+4. Test available tar.exe capabilities.
+5. Build a source profile.
+6. Select compression profile.
+7. Create archive groups for the selected profile.
+8. Create a structure stage for directory metadata.
+9. Analyze file content according to the selected analysis scope.
+10. Assign files to logical groups.
+11. Create one internal block per non-empty group.
+12. Compress or store each block using its assigned method.
+13. Hash every block with SHA256.
+14. Write manifest.json.
+15. Create outer .star TAR container with manifest.json and blocks/.
+16. Verify the created archive.
+17. Clean temporary work directory.
 ```
 
 Important staging rule:
@@ -424,31 +538,28 @@ relative path = A\B\file.txt
 
 ---
 
-## 14. Extraction algorithm
+## 15. Extraction algorithm
 
 High-level algorithm:
 
 ```text
-1. Extract outer .star container into temporary outer folder.
+1. Extract outer .star container into a temporary outer folder.
 2. Read manifest.json.
 3. For every block:
    a. Validate block path.
-   b. Verify SHA256 hash.
+   b. Verify SHA256 hash when available.
    c. List block entries to detect unsafe paths.
-   d. Extract block into temporary payload folder.
+   d. Extract block into a temporary payload folder.
 4. Determine root name from manifest.sourceName.
-5. If payload contains payload\rootName:
-      copy contents of payload\rootName into target\rootName
-   Else:
-      copy contents of payload into target\rootName
+5. Copy payload content into the final destination.
 6. Clean temporary work directory.
 ```
 
-No deduplication is performed.
+No folder-name deduplication is performed.
 
 ---
 
-## 15. Safe path requirements
+## 16. Safe path requirements
 
 Relative paths inside manifest and blocks must not contain:
 
@@ -478,7 +589,39 @@ root/folder/file.txt
 
 ---
 
-## 16. Manual recovery
+## 17. Verification
+
+Verification checks:
+
+```text
+1. The outer STAR container can be extracted.
+2. manifest.json exists and can be parsed.
+3. Every manifest block path is safe.
+4. Every referenced block exists.
+5. Every block can be listed by tar.exe.
+6. Every block SHA256 hash matches the manifest value when present.
+```
+
+A successful verification report shows:
+
+```text
+Verification: OK
+Blocks failed: 0
+```
+
+---
+
+## 18. Salvage behavior
+
+Because STAR uses independent internal blocks, healthy blocks can still be extracted even if another block is damaged.
+
+Salvage mode may skip failed blocks and extract the remaining valid blocks.
+
+This is one of the key advantages of the STAR block model compared to a single monolithic compressed stream.
+
+---
+
+## 19. Manual recovery
 
 Because STAR is TAR-based, the archive can be inspected manually.
 
@@ -503,20 +646,28 @@ dir outer\blocks
 
 ### Step 4: Extract a block manually
 
+For an XZ9 block:
+
 ```powershell
 mkdir restore
-tar -xf outer\blocks\000001_compressible.tar.xz -C restore
+tar -xf outer\blocks\000002_text.tar.xz -C restore
 ```
 
-or for STORE blocks:
+For a STORE block:
 
 ```powershell
-tar -xf outer\blocks\000002_stored.tar -C restore
+tar -xf outer\blocks\000004_archives.tar -C restore
+```
+
+For the structure block:
+
+```powershell
+tar -xf outer\blocks\000001_structure.tar.xz -C restore
 ```
 
 ---
 
-## 17. Compatibility notes
+## 20. Compatibility notes
 
 A STAR archive is not a ZIP file.
 
@@ -526,8 +677,8 @@ It is a TAR-based container with this structure:
 outer TAR
 ├─ manifest.json
 └─ blocks
-   ├─ internal TAR / TAR.XZ block
-   └─ internal TAR / TAR.XZ block
+   ├─ internal TAR / TAR.XZ / TAR.ZST block
+   └─ internal TAR / TAR.XZ / TAR.ZST block
 ```
 
 A generic archive tool may show only the outer layer first.
@@ -535,7 +686,7 @@ Manual extraction may require extracting the outer container and then extracting
 
 ---
 
-## 18. Recommended file naming
+## 21. Recommended file naming
 
 Recommended archive names:
 
@@ -548,62 +699,72 @@ backup-name_yyyyMMdd_HHmmss.star
 Recommended block naming:
 
 ```text
-000001_compressible.tar.xz
-000002_stored.tar
-000003_text.tar.xz
+000001_structure.tar.xz
+000002_text.tar.xz
+000003_unknown.tar.xz
+000004_archives.tar
+000005_binary.tar.xz
 ```
 
 ---
 
-## 19. Current known design decisions
+## 22. Current known design decisions
 
 - The selected root folder is always preserved.
 - Same-name child folders are valid content.
 - No folder-name deduplication is allowed.
-- Every block must contain the selected root prefix.
 - Blocks are independently recoverable.
 - The manifest is mandatory.
 - SHA256 verification is mandatory for block integrity.
 - `.star` remains manually recoverable using standard TAR tooling.
+- SmartTAR remains a wrapper over Windows `tar.exe` / `bsdtar`.
+- No external compressor dependency is required.
+- Structure metadata is stored in a separate structure block.
+- The structure block is compressed with XZ9 when available.
 
 ---
 
-## 20. Version notes
+## 23. Version notes
 
-### SmartTAR STAR 1.0 Beta 1 / Root Preserving Smart Hybrid v8
+### SmartTAR STAR v1.2.0
 
 Key changes:
 
-- Restores Smart / Hybrid / Solid / Store modes.
-- Preserves root folder structure proven in v7.
-- Fixes empty-root extraction issue caused by mixed block paths.
-- Ensures every block contains selected root prefix.
-- Removes folder-name deduplication behavior.
+- Introduces CPU-aware parallel content analysis using PowerShell RunspacePool.
+- Uses safe worker scaling: 1 / 2 / 4 workers depending on logical CPU count.
+- Cleans up user-facing profiles to Balanced / Smart / Solid / Store.
+- Removes old Hybrid / SmartXZ naming from stable workflow.
+- Improves Smart max-compression profile behavior.
+- Compresses the structure block as `structure.tar.xz` when XZ9 is available.
+- Keeps STORE fallback for structure block creation.
 - Keeps SHA256 verification per block.
 - Keeps transparent TAR-based recovery model.
+- Simplifies stable report output.
 
 ---
 
-## 21. Minimal compliance checklist
+## 24. Minimal compliance checklist
 
-A valid root-preserving STAR archive should satisfy:
+A valid STAR v1 archive should satisfy:
 
 ```text
 [ ] Outer archive contains manifest.json
 [ ] Outer archive contains blocks/
 [ ] manifest.format == STAR
+[ ] manifest.formatVersion == 1
 [ ] manifest.sourceName is present
 [ ] manifest.sourceType is Folder or File
 [ ] Every block path is relative and safe
 [ ] Every block exists in blocks/
 [ ] Every block SHA256 matches manifest
-[ ] Every folder archive block contains sourceName as root prefix
+[ ] Folder archive payload preserves the selected root name
 [ ] No same-name folder is skipped during extraction
+[ ] Structure block is readable by tar.exe
 ```
 
 ---
 
-## 22. Example expected result
+## 25. Example expected result
 
 Source:
 
