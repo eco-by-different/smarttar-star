@@ -1,294 +1,276 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/winzstd)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/winzstd)
 
-# SmartTAR - STAR v1.1
+# SmartTAR STAR v1.2.0
 
-SmartTAR STAR is a lightweight Windows PowerShell GUI archiver built on top of Windows `tar.exe` / bsdtar.
+## Release Title
 
-The goal of SmartTAR is to provide a practical archive workflow with smart grouping, safer path handling, verification reports, and a stable `.star` archive format.
-
-Recommended release file: SmartTAR 1.1.ps1
+**v1.2.0 - Responsive Analysis Engine, Safer Staging, and STAR Block Optimizations**
 
 ---
 
-## What is SmartTAR - STAR?
+## Release Notes
 
-SmartTAR STAR creates `.star` archives using a grouped block model.
+SmartTAR STAR v1.2.0 is a stability, performance, and architecture-focused release.
 
-Instead of blindly compressing everything the same way, SmartTAR separates data into logical groups and stores them as internal TAR blocks. This allows SmartTAR to:
+This version significantly improves archive planning, content analysis responsiveness, cross-volume staging behavior, and internal STAR block layout while keeping the original project philosophy intact:
 
-- store already-compressed data without wasting time recompressing it,
-- compress suitable data with stronger compression,
-- verify archive blocks after creation,
-- produce readable reports,
-- work more safely across disks, virtual drives, and read-only media.
+> SmartTAR is not a custom compression engine.  
+> It is a smart PowerShell wrapper and STAR container orchestrator built on top of Windows `tar.exe` / `bsdtar`.
+
+The goal of v1.2.0 is to get more practical value from the built-in Windows archiving backend through smarter data grouping, safer staging, better verification, and cleaner internal structure.
 
 ---
 
 ## Screenshot
 
-![WinZSTD screenshot](docs/images/smarttar-gui.png)
+![SmartTAR screenshot](docs/images/smarttar-gui.png)
 
 ---
 
-## Current version
+## Key Features & Architectural Improvements
+
+### 1. CPU-Aware Parallel Content Analysis
+
+Previous versions performed content analysis sequentially.  
+On larger datasets, this made the planning phase noticeably slower.
+
+SmartTAR STAR v1.2.0 introduces parallel content analysis using a PowerShell `RunspacePool`.
+
+The parallel analysis covers:
 
 ```text
-SmartTAR STAR v1.1
+magic byte detection
+sample reading
+byte entropy calculation
+zero-byte ratio calculation
+unique byte counting
+text / binary / store-like classification
 ```
 
-This version is the current stable baseline.
+To avoid overloading smaller systems, the worker count is automatically limited using a safe CPU-aware scale:
+
+```text
+≤ 2 logical threads  → 1 worker
+≤ 4 logical threads  → 2 workers
+> 4 logical threads  → 4 workers
+```
+
+This improves Smart profile planning speed while keeping the system responsive.
 
 ---
 
-## Supported archive format
+### 2. Improved Smart Profile Behavior
 
-SmartTAR uses the `.star` extension.
+The `Smart - max compression` profile now uses full content analysis and a clear max-compression strategy.
+
+Current Smart profile block strategy:
 
 ```text
-example.star
+structure → XZ9
+text      → XZ9
+unknown   → XZ9
+binary    → XZ9
+archives  → STORE
 ```
 
-The `.star` file is a SmartTAR container with internal grouped TAR blocks and a manifest.
+Already-compressed or archive-like data is stored without unnecessary recompression, while compressible data is grouped and compressed using XZ9.
 
 ---
 
-## Supported compression methods
+### 3. Compressed STAR Structure Block
 
-SmartTAR STAR v1.1 uses the stable method set:
+The internal directory structure block is now compressed using XZ9 when available.
 
-```text
-STORE
-XZ9
-ZSTD19
-```
-
-### STORE
-
-Used for data that is already compressed or not worth recompressing.
-
-Typical examples:
+Old internal layout:
 
 ```text
-.zip, .7z, .rar, .jpg, .png, .mp4, .mp3, .pdf
+000001_structure.tar
 ```
 
-### XZ9
-
-Used for highly compressible data where maximum compression ratio is preferred.
-
-Typical examples:
+New internal layout:
 
 ```text
-.txt, .log, .csv, .xml, .json, .ps1, .bat, .cmd, source/config files
+000001_structure.tar.xz
 ```
 
-### ZSTD19
+A safe fallback to STORE remains available if XZ9 structure block creation fails.
 
-Available when supported by the installed Windows tar/bsdtar implementation.
+In validation testing, the structure block was reduced from approximately:
+
+```text
+120 KB → 2.5 KB
+```
+
+while archive verification remained successful.
 
 ---
 
-## Main features
+### 4. Safer Cross-Volume Staging Behavior
 
-- Windows PowerShell GUI.
-- Uses Windows `tar.exe` / bsdtar.
-- Creates `.star` archives.
-- Supports grouped archive blocks.
-- Supports STORE, XZ9, and ZSTD19.
-- Verifies archives after creation.
-- Generates readable reports.
-- Supports extraction.
-- Supports verify-only mode.
-- Supports optional Adaptive deep analyze.
-- Handles safer temp/report paths.
-- Works better across different disks and read-only/virtual media.
+SmartTAR continues to prefer hardlink-based staging where possible.
+
+When hardlinks are not available, for example during cross-volume operations, SmartTAR can fall back to copy-based staging instead of immediately fragmenting the archive into many small chunked blocks.
+
+The chunked fallback remains available as a last-resort safeguard.
+
+This improves stability when working across different disks, volumes, or more restrictive filesystem environments.
 
 ---
 
-## Smart staging behavior
+### 5. Cleaner Compression Profiles
 
-SmartTAR STAR v1.1 improves the CREATE path policy.
+The user-facing compression profiles were simplified and clarified.
 
-For archive creation, SmartTAR now prefers staging on the same volume as the source data.
+Current profiles:
+
+```text
+Balanced - mixed blocks
+Smart - max compression
+Solid - single block
+Store - no compression
+```
+
+Older internal naming such as `Hybrid` and `SmartXZ` has been removed from the user-facing workflow.
+
+---
+
+### 6. Shorter Runtime Status Messages
+
+Long runtime progress messages were simplified.
 
 Example:
 
 ```text
-Source: C:\Users\User\Desktop\Data
-Output: Z:\Backup\Data.star
-Create staging: C:\SmartTAR_Temp\...
-Final archive: Z:\Backup\Data.star
+Analyzing content...
 ```
 
-This helps preserve hardlink support and prevents unnecessary block splitting.
+This keeps the GUI cleaner and easier to read during longer operations.
 
 ---
 
-## Why source-volume staging matters
+### 7. More Compact Stable Report Output
 
-Hardlinks work only on the same volume.
+The final report was cleaned up for stable use.
 
-When source data and staging are on the same volume, SmartTAR can create a staging tree using hardlinks instead of copying all data.
-
-This means:
-
-- less temporary disk usage,
-- faster staging,
-- better chance of creating one large compressible block,
-- better compression ratio for XZ9 data.
-
-If source-volume staging is not possible, SmartTAR can fall back to standard temp storage and use copy-based group staging before falling back to chunked blocks.
-
----
-
-## Fallback order during CREATE
-
-SmartTAR STAR v1.1 uses this preferred order:
+The report now focuses on the most important information:
 
 ```text
-1. Source-volume hardlink group-stage
-2. Standard temp with copy group-stage
-3. Chunked fallback blocks as last resort
+Compression groups
+Compression method summary
+Analysis diagnostics
+Verification result
 ```
 
-Chunked fallback is intentionally kept as a safety path, but it is no longer the preferred fallback.
-
----
-
-## VERIFY behavior
-
-VERIFY uses standard SmartTAR temp storage.
-
-This is intentional because verify only needs to read the archive and inspect/check its internal blocks.
-
-This makes VERIFY more reliable for:
-
-- virtual CD/DVD drives,
-- mounted read-only images,
-- read-only media,
-- archive locations where writing next to the archive is not possible.
-
----
-
-## Reports
-
-SmartTAR creates text reports for operations.
-
-Typical report types:
+Verbose development diagnostics were removed from the stable output, including:
 
 ```text
-create_report
-extract_report
-verify_report
+entropy summary
+unique byte summary
+heuristic matrix commentary
+compression preference branch listing
 ```
 
-Report behavior:
+---
+
+## Validation Summary
+
+SmartTAR STAR v1.2.0 was validated across all main profiles:
 
 ```text
-CREATE  -> report near the created archive
-EXTRACT -> report near the extraction target
-VERIFY  -> report near the archive, with fallback when needed
+Smart - max compression   OK
+Balanced - mixed blocks   OK
+Solid - single block      OK
+Store - no compression    OK
+Verify                    OK
 ```
 
-If the preferred report location is not writable, SmartTAR uses a safe report fallback location under SmartTAR temp storage.
-
----
-
-## Adaptive deep analyze
-
-Adaptive deep analyze is optional.
-
-When enabled, SmartTAR performs additional analysis on unknown file types using magic bytes and conservative byte/entropy checks.
-
-This can help decide whether unknown files should be treated as:
+Example validation result using the Smart profile:
 
 ```text
-text / compressible
-binary
-already-compressed / STORE
-unknown
-```
-
-For normal use, Adaptive can stay disabled unless you want deeper classification.
-
----
-
-## Recommended usage
-
-### Create archive
-
-1. Start `SmartTAR_STAR_v1_1_Clean.ps1`.
-2. Select a file or folder.
-3. Choose target `.star` path.
-4. Select compression mode.
-5. Click create/compress.
-6. Check the report for verification result.
-
-### Verify archive
-
-1. Select a `.star` archive.
-2. Run Verify.
-3. Check the generated verify report.
-
-### Extract archive
-
-1. Select a `.star` archive.
-2. Select extraction target folder.
-3. Run Extract.
-4. Check the extraction report.
-
----
-
-## Expected healthy report indicators
-
-A healthy archive should show:
-
-```text
+Source size: 415.37 MB
+Archive size: 140.79 MB
+Ratio: 33.89 %
+Saved: 66.11 %
 Verification: OK
-Blocks failed: 0
 ```
 
-For typical Hybrid archives, SmartTAR should avoid unnecessary block splitting. A small number of grouped blocks is expected.
+The Smart profile result confirms that the updated block layout and compressed structure block work correctly while preserving archive integrity.
 
-If you see many blocks like this:
+---
+
+## Internal STAR Layout
+
+A typical Smart profile archive now uses an internal block layout similar to:
 
 ```text
-compressible_p001
-compressible_p002
-compressible_p003
-...
+manifest.json
+blocks/
+  000001_structure.tar.xz
+  000002_text.tar.xz
+  000003_unknown.tar.xz
+  000004_archives.tar
+  000005_binary.tar.xz
 ```
 
-it means SmartTAR used the chunked fallback path. The archive can still be valid, but the compression ratio may be worse.
+Each internal block remains a standard tar-compatible unit:
+
+```text
+.tar
+.tar.xz
+.tar.zst
+```
+
+The STAR container adds:
+
+```text
+manifest metadata
+block grouping
+block hashing
+verification
+diagnostics
+salvage-friendly structure
+```
 
 ---
 
-## Notes and limitations
+## Design Philosophy
 
-- SmartTAR depends on the available Windows `tar.exe` / bsdtar capabilities.
-- ZSTD support depends on the installed tar implementation.
-- CREATE may need temporary space for internal blocks.
-- If hardlink staging cannot be used, copy fallback may require additional temporary space.
-- Chunked fallback is safe, but may reduce compression efficiency.
-- The tool is designed for practical Windows usage, not as a replacement for every advanced feature of dedicated archivers.
+SmartTAR STAR is not intended to replace specialized commercial compression engines.
 
----
+Instead, SmartTAR focuses on:
 
-## Version 1.1 highlights
+```text
+smart block planning
+content-aware grouping
+safe use of Windows tar.exe / bsdtar
+clear manifest structure
+block-level verification
+salvage-friendly archive layout
+no external compressor dependencies
+```
 
-- Improved CREATE staging policy.
-- Source-volume staging first.
-- Hardlink-first group staging.
-- Copy group-stage fallback before chunked fallback.
-- VERIFY uses standard SmartTAR temp storage.
-- Improved report path handling.
-- Removed legacy SARC handling.
-- Removed old beta/fix/rc labels.
-- Cleaned internal versioning.
-- Stable method set: STORE, XZ9, ZSTD19.
+The result is a practical, dependency-light STAR container format that gets more out of the built-in Windows tar engine through better orchestration.
 
 ---
+
+## Summary
+
+SmartTAR STAR v1.2.0 improves performance, stability, and internal archive structure while preserving the original lightweight wrapper design.
+
+Main highlights:
+
+```text
+CPU-aware parallel content analysis
+safer staging behavior
+compressed structure block
+cleaner compression profiles
+shorter GUI progress messages
+simplified stable reports
+verified STAR archive integrity
+```
+
+This release is considered the stable v1.2 baseline.
 
 ## License
 
