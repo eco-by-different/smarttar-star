@@ -368,6 +368,19 @@ $fNormal = [System.Drawing.Font]::new('Segoe UI', 9)
 $fBold = [System.Drawing.Font]::new('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
 $fItalic = [System.Drawing.Font]::new('Segoe UI', 9, [System.Drawing.FontStyle]::Italic)
 
+function Get-SafeWorkerCount {
+    $cpuThreads = [Environment]::ProcessorCount
+
+    if ($cpuThreads -le 2) { return 1 }
+    if ($cpuThreads -le 4) { return 2 }
+    return 4
+}
+
+function Set-BusyStatus {
+    param([string]$Text)
+    Set-AppStatus $Text ([System.Drawing.Color]::DarkOrange)
+}
+
 $script:StableXzStageTime = [datetime]'2000-01-01T00:00:00'
 $script:selectedPath = ''
 $script:selectedType = ''
@@ -391,10 +404,7 @@ $script:FormatName = 'STAR'
 $script:FormatVersion = 1
 $script:ArchiveExtension = '.star'
 $script:AdaptiveSampleBytes = 1MB
-$cpuThreads = [Environment]::ProcessorCount
-if ($cpuThreads -le 2) { $script:MaxParallelAnalysis = 1 }
-elseif ($cpuThreads -le 4) { $script:MaxParallelAnalysis = 2 }
-else { $script:MaxParallelAnalysis = 4 }
+$script:MaxParallelAnalysis = Get-SafeWorkerCount
 $script:analysisScope = 'None'
 $script:compressionPreference = 'Balanced'
 $script:adaptiveDeepAnalyze = $false
@@ -913,7 +923,7 @@ function Stage-FilesPlan {
     $profileName = Get-CompressionProfileDisplayName $Mode $script:compressionPreference
     $script:adaptiveDeepAnalyze = Test-ContentAnalysisEnabled $script:analysisScope
     $script:adaptiveStats = New-AdaptiveStats
-    Set-AppStatus "Planning blocks: $profileName..." ([System.Drawing.Color]::DarkOrange)
+    Set-BusyStatus "Planning blocks: $profileName..."
     $files = @(Get-SortedSourceFiles $SourceItem $Source $BaseRoot)
     $plans = New-Object System.Collections.ArrayList
     $analysisTargets = New-Object System.Collections.ArrayList
@@ -936,7 +946,7 @@ function Stage-FilesPlan {
             }
         }
         else {
-            Set-AppStatus "Analyzing content..." ([System.Drawing.Color]::DarkOrange)
+            Set-BusyStatus "Analyzing content..."
             $analysisResults = Invoke-ParallelAdaptiveAnalysis -Targets @($analysisTargets) -MaxParallel $maxParallel -SampleBytes ([int]$script:AdaptiveSampleBytes)
         }
     }
@@ -1231,7 +1241,7 @@ function Build-Blocks {
         $blockPath = Join-Path $BlocksDir ("$id`_structure$($structureMethod.Extension)")
         $structureReason = 'Directory structure only. Metadata-friendly XZ9 structure block.'
         try {
-            Set-AppStatus "Creating block $id structure..." ([System.Drawing.Color]::DarkOrange)
+            Set-BusyStatus "Creating block $id structure..."
             Create-BlockFromStageDirect $TarPath $StructureStage $blockPath $structureMethod
         }
         catch {
@@ -1240,7 +1250,7 @@ function Build-Blocks {
                 $structureMethod = $StoreMethod
                 $blockPath = Join-Path $BlocksDir ("$id`_structure$($structureMethod.Extension)")
                 $structureReason = 'Directory structure only. XZ9 structure block failed; STORE fallback used.'
-                Set-AppStatus "Creating block $id structure..." ([System.Drawing.Color]::DarkOrange)
+                Set-BusyStatus "Creating block $id structure..."
                 Create-BlockFromStageDirect $TarPath $StructureStage $blockPath $structureMethod
             }
             else { throw }
@@ -1252,11 +1262,11 @@ function Build-Blocks {
     foreach ($groupName in $Groups.Keys) {
         $group = $Groups[$groupName]; if ([int]$group.FileCount -le 0) { continue }
         $id = '{0:D6}' -f $index; $safeGroup = [string]$group.Name; $blockPath = Join-Path $BlocksDir ("$id`_$safeGroup$($group.Method.Extension)"); $stageRoot = $null; $ok = $false; $err = $null; $usedCopyFallback = $false
-        try { $stageModeText = if ($AllowGroupCopyFallback) { 'hardlink/copy' } else { 'hardlink' }; Set-AppStatus "Creating group $stageModeText stage for block $id $safeGroup..." ([System.Drawing.Color]::DarkOrange); $stageRoot = New-GroupHardlinkStage $WorkRoot @($group.Files) $AllowGroupCopyFallback; if ([string]$group.Method.Algorithm -eq 'xz') { Set-AppStatus "Normalizing XZ stage directory timestamps for block $id $safeGroup..." ([System.Drawing.Color]::DarkOrange) }; Set-AppStatus "Creating group block $id $safeGroup..." ([System.Drawing.Color]::DarkOrange); Create-BlockFromStageDirect $TarPath $stageRoot $blockPath $group.Method; $ok = $true; $usedCopyFallback = [bool]$AllowGroupCopyFallback } catch { $err = [string]$_.Exception.Message; $ok = $false } finally { Remove-SmartTarTempFolder $stageRoot }
+        try { $stageModeText = if ($AllowGroupCopyFallback) { 'hardlink/copy' } else { 'hardlink' }; Set-BusyStatus "Creating group $stageModeText stage for block $id $safeGroup..."; $stageRoot = New-GroupHardlinkStage $WorkRoot @($group.Files) $AllowGroupCopyFallback; if ([string]$group.Method.Algorithm -eq 'xz') { Set-BusyStatus "Normalizing XZ stage directory timestamps for block $id $safeGroup..." }; Set-BusyStatus "Creating group block $id $safeGroup..."; Create-BlockFromStageDirect $TarPath $stageRoot $blockPath $group.Method; $ok = $true; $usedCopyFallback = [bool]$AllowGroupCopyFallback } catch { $err = [string]$_.Exception.Message; $ok = $false } finally { Remove-SmartTarTempFolder $stageRoot }
         if ($ok -and (Test-Path -LiteralPath $blockPath)) { $diagMessage = if ($usedCopyFallback) { 'Created as one group-stage block. Copy fallback was allowed if hardlinks were unavailable.' } else { 'Created as one group-stage block.' }; if ([string]$group.Method.Algorithm -eq 'xz') { $diagMessage += ' XZ directory timestamps normalized.' }; Add-GroupDiagnostic $safeGroup 'group-stage-ok' $diagMessage ([int]$group.FileCount) ([int64]$group.Bytes); Add-BlockManifestItem ([ref]$blocks) $id $safeGroup $blockPath $group.Method ([string]$group.Reason + ' group-stage block.') ([int]$group.FileCount) 0 ([int64]$group.Bytes); $index++; continue }
-        Add-GroupDiagnostic $safeGroup 'fallback-chunked' ('Group-stage failed. ' + $err) ([int]$group.FileCount) ([int64]$group.Bytes); Set-AppStatus "Group stage failed for $safeGroup. Falling back to chunked blocks..." ([System.Drawing.Color]::DarkOrange)
+        Add-GroupDiagnostic $safeGroup 'fallback-chunked' ('Group-stage failed. ' + $err) ([int]$group.FileCount) ([int64]$group.Bytes); Set-BusyStatus "Group stage failed for $safeGroup. Falling back to chunked blocks..."
         $chunks = Split-FileChunks -Files $group.Files; $part = 1
-        foreach ($chunkInfo in $chunks) { $chunkFiles = @($chunkInfo.Files); if ($chunkFiles.Count -lt 1) { continue }; $id = '{0:D6}' -f $index; $suffix = if ($chunks.Count -gt 1) { '_p{0:D3}' -f $part } else { '' }; $fallbackGroup = ([string]$group.Name) + $suffix; $blockPath = Join-Path $BlocksDir ("$id`_$fallbackGroup$($group.Method.Extension)"); $chunkStage = $null; try { Set-AppStatus "Creating fallback chunk stage for block $id..." ([System.Drawing.Color]::DarkOrange); $chunkStage = New-ChunkHardlinkStage $WorkRoot $chunkFiles; $relativePaths = @($chunkFiles | ForEach-Object { [string]$_.Rel }); if ([string]$group.Method.Algorithm -eq 'xz') { Set-AppStatus "Normalizing XZ fallback stage timestamps for block $id..." ([System.Drawing.Color]::DarkOrange) }; Set-AppStatus "Creating fallback block $id $fallbackGroup..." ([System.Drawing.Color]::DarkOrange); Create-BlockFromStageList $TarPath $chunkStage $blockPath $group.Method $relativePaths } finally { Remove-SmartTarTempFolder $chunkStage }; $sourceBytes = [int64]0; foreach ($file in $chunkFiles) { $sourceBytes += [int64]$file.Bytes }; $reason = ([string]$group.Reason) + " Group-stage failed, chunk fallback used. Error: $err"; Add-BlockManifestItem ([ref]$blocks) $id $fallbackGroup $blockPath $group.Method $reason ([int]$chunkFiles.Count) 0 $sourceBytes; $index++; $part++ }
+        foreach ($chunkInfo in $chunks) { $chunkFiles = @($chunkInfo.Files); if ($chunkFiles.Count -lt 1) { continue }; $id = '{0:D6}' -f $index; $suffix = if ($chunks.Count -gt 1) { '_p{0:D3}' -f $part } else { '' }; $fallbackGroup = ([string]$group.Name) + $suffix; $blockPath = Join-Path $BlocksDir ("$id`_$fallbackGroup$($group.Method.Extension)"); $chunkStage = $null; try { Set-BusyStatus "Creating fallback chunk stage for block $id..."; $chunkStage = New-ChunkHardlinkStage $WorkRoot $chunkFiles; $relativePaths = @($chunkFiles | ForEach-Object { [string]$_.Rel }); if ([string]$group.Method.Algorithm -eq 'xz') { Set-BusyStatus "Normalizing XZ fallback stage timestamps for block $id..." }; Set-BusyStatus "Creating fallback block $id $fallbackGroup..."; Create-BlockFromStageList $TarPath $chunkStage $blockPath $group.Method $relativePaths } finally { Remove-SmartTarTempFolder $chunkStage }; $sourceBytes = [int64]0; foreach ($file in $chunkFiles) { $sourceBytes += [int64]$file.Bytes }; $reason = ([string]$group.Reason) + " Group-stage failed, chunk fallback used. Error: $err"; Add-BlockManifestItem ([ref]$blocks) $id $fallbackGroup $blockPath $group.Method $reason ([int]$chunkFiles.Count) 0 $sourceBytes; $index++; $part++ }
     }
     return $blocks
 }
@@ -1640,7 +1650,7 @@ function Verify-SmartArchive {
     $work=New-SafeWorkRoot 'verify' $ArchivePath; $outer=Join-Path $work 'outer'; [System.IO.Directory]::CreateDirectory($outer)|Out-Null
     try{
         $safeArchive=Prepare-SafeArchiveInput $ArchivePath $work; Invoke-Tar $TarPath @('-xf',$safeArchive,'-C',$outer) 'Outer verification failed.'; $manifest=Read-OuterManifest $outer; $blocks=@($manifest.blocks); $ok=0; $fail=0; $lines=@()
-        foreach($block in $blocks){Set-AppStatus "Verifying block $($block.id) $($block.group)..." ([System.Drawing.Color]::DarkOrange); $blockPath=Resolve-SafeBlockPath $outer ([string]$block.path); if(-not (Test-Path -LiteralPath $blockPath)){$fail++; $lines+="MISSING: $($block.path)"; continue}; $listed=Invoke-TarList $TarPath $blockPath; $hashOk=$true; if($block.sha256){$hashOk=((Get-FileSHA256 $blockPath) -eq ([string]$block.sha256).ToLowerInvariant())}; if($listed -and $hashOk){$ok++}else{$fail++; $lines+="FAIL: $($block.id) $($block.group) $($block.path)"}}
+        foreach($block in $blocks){Set-BusyStatus "Verifying block $($block.id) $($block.group)..."; $blockPath=Resolve-SafeBlockPath $outer ([string]$block.path); if(-not (Test-Path -LiteralPath $blockPath)){$fail++; $lines+="MISSING: $($block.path)"; continue}; $listed=Invoke-TarList $TarPath $blockPath; $hashOk=$true; if($block.sha256){$hashOk=((Get-FileSHA256 $blockPath) -eq ([string]$block.sha256).ToLowerInvariant())}; if($listed -and $hashOk){$ok++}else{$fail++; $lines+="FAIL: $($block.id) $($block.group) $($block.path)"}}
         $verification=if($fail -eq 0){'OK'}else{'FAILED'}; $diag=Format-GroupDiagnostics $manifest; $methodDiag=Format-CompressionMethodSummary $manifest; $adaptiveDiag=Format-AdaptiveDiagnostics $manifest; $failedDetails=''; if($fail -gt 0 -and $lines.Count -gt 0){$failedDetails="`r`n`r`nFailed block details:`r`n"+($lines -join "`r`n")}
         return @"
 Archive:
@@ -1706,7 +1716,7 @@ function Compress-SmartArchive {
     [System.IO.Directory]::CreateDirectory($structureStage) | Out-Null
 
     try {
-        Set-AppStatus 'Checking TAR capabilities...' ([System.Drawing.Color]::DarkOrange)
+        Set-BusyStatus 'Checking TAR capabilities...'
         $capabilities = Test-TarCapabilities $TarPath $work
         if (-not $capabilities.store) { throw 'No usable tar store method.' }
 
@@ -1716,24 +1726,24 @@ function Compress-SmartArchive {
         if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }
         if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }
 
-        Set-AppStatus 'Analyzing source...' ([System.Drawing.Color]::DarkOrange)
+        Set-BusyStatus 'Analyzing source...'
         $profile = Get-SourceProfile $sourceItem $Source $sourceParent
         $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode)
-        Set-AppStatus "Selected profile: $profileName" ([System.Drawing.Color]::DarkOrange)
+        Set-BusyStatus "Selected profile: $profileName"
         $groups = New-ArchiveGroups $Mode $capabilities $profile
 
         Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups
         $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage
         $storeMethod = Select-StoreMethod $capabilities
 
-        Set-AppStatus "Creating blocks: $profileName..." ([System.Drawing.Color]::DarkOrange)
+        Set-BusyStatus "Creating blocks: $profileName..."
         $blocks = Build-Blocks $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod
         if ($blocks.Count -lt 1) { throw 'No blocks were created.' }
 
         $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks
         Write-Manifest (Join-Path $work 'manifest.json') $manifest
 
-        Set-AppStatus "Building STAR archive: $profileName..." ([System.Drawing.Color]::DarkOrange)
+        Set-BusyStatus "Building STAR archive: $profileName..."
         $safeOuter = Join-Path $work 'archive.star'
         Invoke-Tar $TarPath @('-cf', $safeOuter, '-C', $work, 'manifest.json', 'blocks') 'Outer .star archive creation failed.'
 
@@ -1773,7 +1783,7 @@ if (-not (Test-Blank $WorkerConfigFile)) {
         if ($action -eq 'Compress') {
             if (Test-Blank $destination) { throw 'Worker destination path is empty.' }
 
-            Set-AppStatus 'Starting compression...' ([System.Drawing.Color]::DarkOrange)
+            Set-BusyStatus 'Starting compression...'
             Compress-SmartArchive $tarPath $source $destination $mode
 
             try {
@@ -1809,7 +1819,7 @@ if (-not (Test-Blank $WorkerConfigFile)) {
         elseif ($action -eq 'Extract') {
             if (Test-Blank $destination) { throw 'Worker destination path is empty.' }
 
-            Set-AppStatus 'Starting extraction...' ([System.Drawing.Color]::DarkOrange)
+            Set-BusyStatus 'Starting extraction...'
             Extract-SmartArchive $tarPath $source $destination $salvage
 
             $skipped = @($script:lastSalvageSkippedBlocks)
@@ -1835,7 +1845,7 @@ if (-not (Test-Blank $WorkerConfigFile)) {
             } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resultFile -Encoding UTF8
         }
         elseif ($action -eq 'Verify') {
-            Set-AppStatus 'Starting verification...' ([System.Drawing.Color]::DarkOrange)
+            Set-BusyStatus 'Starting verification...'
             $summary = Verify-SmartArchive $tarPath $source
 
             Write-ReportFile $internalReport $summary
@@ -2007,10 +2017,7 @@ $script:FormatName = 'STAR'
 $script:FormatVersion = 1
 $script:ArchiveExtension = '.star'
 $script:AdaptiveSampleBytes = 1MB
-$cpuThreads = [Environment]::ProcessorCount
-if ($cpuThreads -le 2) { $script:MaxParallelAnalysis = 1 }
-elseif ($cpuThreads -le 4) { $script:MaxParallelAnalysis = 2 }
-else { $script:MaxParallelAnalysis = 4 }
+$script:MaxParallelAnalysis = Get-SafeWorkerCount
 $script:analysisScope = 'None'
 $script:compressionPreference = 'Balanced'
 $script:adaptiveDeepAnalyze = $false
@@ -2058,7 +2065,7 @@ $script:adaptiveStats = $null
     $script:currentProcess = [System.Diagnostics.Process]::Start($psi)
 
     Set-UiBusy $true
-    Set-AppStatus "$Action started..." ([System.Drawing.Color]::DarkOrange)
+    Set-BusyStatus "$Action started..."
     $timer.Start()
     Clear-UiFocus
 }
@@ -2281,7 +2288,7 @@ $timer.Add_Tick({
         if (-not (Test-Blank $script:currentStatusFile) -and (Test-Path -LiteralPath $script:currentStatusFile)) {
             $statusText = Get-Content -LiteralPath $script:currentStatusFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
             if (-not (Test-Blank $statusText)) {
-                Set-AppStatus $statusText.Trim() ([System.Drawing.Color]::DarkOrange)
+                Set-BusyStatus ($statusText.Trim())
             }
         }
 
