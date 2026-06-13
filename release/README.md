@@ -1,6 +1,3 @@
-![Repo size](https://img.shields.io/github/repo-size/eco-by-different/winzstd)
-![Last commit](https://img.shields.io/github/last-commit/eco-by-different/winzstd)
-
 # SmartTAR STAR v1.2.1
 
 ## Release Title
@@ -20,12 +17,6 @@ The analyzer replaces the previous PowerShell byte-level analysis logic and sign
 > It is a smart PowerShell GUI wrapper and STAR container orchestrator built on top of Windows `tar.exe` / `bsdtar`.
 
 The archive format, manifest structure, block layout, verification logic, and extraction behavior remain compatible with STAR v1.2.
-
----
-
-## Screenshot
-
-![SmartTAR screenshot](docs/images/smarttar-gui.png)
 
 ---
 
