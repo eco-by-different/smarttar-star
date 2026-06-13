@@ -455,7 +455,6 @@ function Get-SourceSize {
     }
 }
 
-
 function Get-ReportPath {
     param([string]$BasePath, [string]$Kind)
     $dir = [System.IO.Path]::GetDirectoryName($BasePath)
@@ -540,6 +539,42 @@ function Write-ReportFile {
         [System.IO.Directory]::CreateDirectory($dir) | Out-Null
     }
     $Text | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+# Report slots: 0 action, 1 title, 2 source size, 3 archive size, 4 ratio, 5 saved,
+# 10 format, 11 version, 12 profile, 13 mode, 14 blocks, 15 blocks OK,
+# 16 blocks failed, 17 verification, 20 archive path, 21 destination,
+# 22 salvage, 25 groups, 26 method summary, 27 analysis, 28 details/warnings.
+
+function Format-OperationReport {
+    param($R)
+
+    $lines = @()
+    if ($R[1]) { $lines += [string]$R[1] }
+
+    foreach ($section in @(
+        @{ Header = '';         Map = @('2|Source size','3|Archive size','4|Ratio','5|Saved') },
+        @{ Header = '';         Map = @('20|Archive path','21|Extraction parent folder','22|Salvage mode') },
+        @{ Header = 'Archive:'; Map = @('10|Format','11|Version','12|Profile','13|Mode','14|Blocks','15|Blocks OK','16|Blocks failed','17|Verification') }
+    )) {
+        $rows = @()
+        foreach ($m in $section.Map) {
+            $p = $m.Split('|', 2)
+            $v = $R[[int]$p[0]]
+            if ($v) { $rows += ('{0}: {1}' -f $p[1], $v) }
+        }
+        if ($rows.Count -gt 0) {
+            $lines += ''
+            if ($section.Header) { $lines += [string]$section.Header }
+            $lines += $rows
+        }
+    }
+
+    foreach ($i in 25..28) {
+        if ($R[$i]) { $lines += [string]$R[$i] }
+    }
+
+    return (($lines -join [Environment]::NewLine).Trim())
 }
 
 function Read-TextFileSafe {
@@ -639,7 +674,6 @@ function Remove-SmartTarWorkAndRoot {
     Remove-EmptySmartTarTempRoot $WorkPath
 }
 
-
 function New-SafeWorkRoot {
     param([string]$Purpose, [string]$PreferredPath)
     $guid = [guid]::NewGuid().ToString('N')
@@ -649,7 +683,6 @@ function New-SafeWorkRoot {
     [System.IO.Directory]::CreateDirectory($work) | Out-Null
     return $work
 }
-
 
 # ============================================================================
 # 04. UI state and status bridge
@@ -817,7 +850,6 @@ function Get-TarMethods {
     )
 }
 
-
 function Get-TarMethodByName {
     param([string]$Name)
     foreach ($method in Get-TarMethods) {
@@ -896,7 +928,6 @@ function Test-TarCapabilities {
     return $capabilities
 }
 
-
 function Select-BestCompressedMethod { param([hashtable]$Capabilities) foreach ($name in @('xz9','zstd19','store')) { if ($Capabilities.ContainsKey($name) -and $Capabilities[$name]) { return Get-TarMethodByName $name } } throw 'No usable tar method found.' }
 function Select-XzOrBest { param([hashtable]$Capabilities) if ($Capabilities.ContainsKey('xz9') -and $Capabilities['xz9']) { return Get-TarMethodByName 'xz9' }; return Select-BestCompressedMethod $Capabilities }
 function Select-ZstdOrBest { param([hashtable]$Capabilities) if ($Capabilities.ContainsKey('zstd19') -and $Capabilities['zstd19']) { return Get-TarMethodByName 'zstd19' }; return Select-BestCompressedMethod $Capabilities }
@@ -937,8 +968,6 @@ function Get-ModeGroupName {
     }
     return $SmartGroup
 }
-
-
 
 function Get-AnalysisScopeForMode {
     param([string]$Mode)
@@ -1005,13 +1034,10 @@ function Invoke-NativeAdaptiveAnalysis {
     }
 }
 
-
-
 function Get-AdaptiveSampleDiagnostics {
     param($File)
     return (Invoke-NativeAdaptiveAnalysis $File)
 }
-
 
 function New-AdaptiveStats {
     $scope=[string]$script:analysisScope; if(Test-Blank $scope){$scope='None'}
@@ -1066,7 +1092,6 @@ function Get-AdaptiveSmartGroupName {
         return 'unknown'
     }
 }
-
 
 function Get-SortedSourceFiles {
     param($SourceItem, [string]$Source, [string]$BaseRoot)
@@ -1190,7 +1215,6 @@ function Add-FileToGroup {
     $Group.Bytes = [int64]$Group.Bytes + [int64]$Bytes
 }
 
-
 function Invoke-ParallelAdaptiveAnalysis {
     param($Targets, [int]$MaxParallel = 4, [int]$SampleBytes = 1048576)
     $items = @($Targets)
@@ -1259,8 +1283,6 @@ function Invoke-ParallelAdaptiveAnalysis {
     }
 }
 
-
-
 function Stage-FilesPlan {
     param($SourceItem,[string]$Source,[string]$BaseRoot,[string]$Mode,[hashtable]$Groups)
     $script:analysisScope = Get-AnalysisScopeForMode $Mode
@@ -1312,7 +1334,6 @@ function Stage-FilesPlan {
     }
 }
 
-
 function Create-StructureStage {
     param($SourceItem, [string]$Source, [string]$BaseRoot, [string]$StageRoot)
     $count = 0
@@ -1331,7 +1352,6 @@ function Create-StructureStage {
     }
     return $count
 }
-
 
 function Split-FileChunks {
     param($Files, [int]$MaxEntries = 96, [int]$MaxChars = 22000)
@@ -1443,12 +1463,10 @@ function New-HardlinkStageInternal {
     return $stageRoot
 }
 
-
 function New-GroupHardlinkStage {
     param([string]$WorkRoot, $GroupFiles, [bool]$AllowCopyFallback = $false)
     return New-HardlinkStageInternal $WorkRoot $GroupFiles $AllowCopyFallback 'groupstage'
 }
-
 
 function New-ChunkHardlinkStage {
     param([string]$WorkRoot, $ChunkFiles)
@@ -1559,7 +1577,6 @@ function Add-BlockManifestItem {
     }
 }
 
-
 function Add-GroupDiagnostic {
     param([string]$Group, [string]$Status, [string]$Message, [int]$FileCount, [int64]$Bytes)
 
@@ -1571,7 +1588,6 @@ function Add-GroupDiagnostic {
         message     = $Message
     }
 }
-
 
 function Build-Blocks {
     param([string]$TarPath,[hashtable]$Groups,[string]$BlocksDir,[string]$WorkRoot,[string]$StructureStage,[int]$StructureDirCount,[hashtable]$StoreMethod,[bool]$AllowGroupCopyFallback = $false)
@@ -1619,7 +1635,6 @@ function Write-Manifest {
     $Data | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
-
 function Build-Manifest {
     param([string]$Source,$SourceItem,[string]$SourceLeaf,[string]$Mode,[hashtable]$Capabilities,[hashtable]$Profile,$Blocks)
     $profileName = Get-CompressionProfileDisplayName $Mode ([string]$script:compressionPreference)
@@ -1643,7 +1658,6 @@ function Build-Manifest {
         blocks = @($Blocks)
     }
 }
-
 
 # ============================================================================
 # 08. Extraction, verification and summary
@@ -1726,7 +1740,6 @@ function Prepare-SafeArchiveInput {
     }
     return $safeArchive
 }
-
 
 function Format-GroupDiagnostics {
     param($Manifest)
@@ -1968,6 +1981,7 @@ function Extract-SmartArchive {
         [System.IO.Directory]::CreateDirectory($DestinationFolder) | Out-Null
     }
 
+    $r=@('')*32; $r[0]='Extract'; $r[1]='Archive extracted successfully.'; $r[20]=[string]$ArchivePath; $r[21]=[string]$DestinationFolder; $r[22]=if($SalvageMode){'ON'}else{'OFF'}
     $work = New-SafeWorkRoot 'extract' $ArchivePath
     $outer = Join-Path $work 'outer'
     $payload = Join-Path $work 'payload'
@@ -1978,34 +1992,33 @@ function Extract-SmartArchive {
         $safeArchive = Prepare-SafeArchiveInput $ArchivePath $work
         Invoke-Tar $TarPath @('-xf', $safeArchive, '-C', $outer) 'Outer extraction failed.'
         $manifest = Read-OuterManifest $outer
+        $r[10]=[string]$manifest.format; $r[11]=[string]$manifest.toolVersion; $r[12]=[string]$manifest.compressionProfile; $r[13]=[string]$manifest.compressionMode; $r[14]=[string]@($manifest.blocks).Count
+        $r[25]=Format-GroupDiagnostics $manifest; $r[26]=Format-CompressionMethodSummary $manifest; $r[27]=Format-AdaptiveDiagnostics $manifest
         [void](Extract-Blocks $TarPath $outer @($manifest.blocks) $payload $SalvageMode)
         Copy-PayloadToFinalDestination $manifest $payload $DestinationFolder $ArchivePath
+        $skipped = @($script:lastSalvageSkippedBlocks)
+        if ($SalvageMode -and $skipped.Count -gt 0) { $r[28]="`r`n`r`nWARNING: Some blocks were skipped.`r`nSkipped blocks: $($skipped.Count)`r`n`r`n$($skipped -join "`r`n`r`n")" }
+        elseif ($SalvageMode) { $r[28]="`r`n`r`nNo broken blocks were detected. Nothing was skipped." }
+        return $r
     }
     finally {
         Remove-SmartTarWorkAndRoot $work
     }
 }
 
-
 function Verify-SmartArchive {
     param([string]$TarPath,[string]$ArchivePath)
     if(-not (Test-Path -LiteralPath $ArchivePath)){throw 'Archive path does not exist.'}
+    $r=@('')*32; $r[0]='Verify'; $r[1]='Archive verification completed.'; $r[20]=[string]$ArchivePath
     $work=New-SafeWorkRoot 'verify' $ArchivePath; $outer=Join-Path $work 'outer'; [System.IO.Directory]::CreateDirectory($outer)|Out-Null
     try{
         $safeArchive=Prepare-SafeArchiveInput $ArchivePath $work; Invoke-Tar $TarPath @('-xf',$safeArchive,'-C',$outer) 'Outer verification failed.'; $manifest=Read-OuterManifest $outer; $blocks=@($manifest.blocks); $ok=0; $fail=0; $lines=@()
         foreach($block in $blocks){Set-BusyStatus "Verifying block $($block.id) $($block.group)..."; $blockPath=Resolve-SafeBlockPath $outer ([string]$block.path); if(-not (Test-Path -LiteralPath $blockPath)){$fail++; $lines+="MISSING: $($block.path)"; continue}; $listed=Invoke-TarList $TarPath $blockPath; $hashOk=$true; if($block.sha256){$hashOk=((Get-FileSHA256 $blockPath) -eq ([string]$block.sha256).ToLowerInvariant())}; if($listed -and $hashOk){$ok++}else{$fail++; $lines+="FAIL: $($block.id) $($block.group) $($block.path)"}}
-        $verification=if($fail -eq 0){'OK'}else{'FAILED'}; $diag=Format-GroupDiagnostics $manifest; $methodDiag=Format-CompressionMethodSummary $manifest; $adaptiveDiag=Format-AdaptiveDiagnostics $manifest; $failedDetails=''; if($fail -gt 0 -and $lines.Count -gt 0){$failedDetails="`r`n`r`nFailed block details:`r`n"+($lines -join "`r`n")}
-        return @"
-Archive:
-Format: $($manifest.format)
-Version: $($manifest.toolVersion)
-Profile: $($manifest.compressionProfile)
-Mode: $($manifest.compressionMode)
-Blocks: $($blocks.Count)
-Blocks OK: $ok
-Blocks failed: $fail
-Verification: $verification$diag$methodDiag$adaptiveDiag$failedDetails
-"@
+        $verification=if($fail -eq 0){'OK'}else{'FAILED'}
+        $r[10]=[string]$manifest.format; $r[11]=[string]$manifest.toolVersion; $r[12]=[string]$manifest.compressionProfile; $r[13]=[string]$manifest.compressionMode; $r[14]=[string]$blocks.Count; $r[15]=[string]$ok; $r[16]=[string]$fail; $r[17]=$verification
+        $r[25]=Format-GroupDiagnostics $manifest; $r[26]=Format-CompressionMethodSummary $manifest; $r[27]=Format-AdaptiveDiagnostics $manifest
+        if($fail -gt 0 -and $lines.Count -gt 0){$r[28]="`r`n`r`nFailed block details:`r`n"+($lines -join "`r`n")}
+        return $r
     }finally{Remove-SmartTarWorkAndRoot $work}
 }
 
@@ -2022,18 +2035,9 @@ function Get-ArchiveSummary {
         $saved = '{0:N2} %' -f ((1 - ($archiveBytes / $sourceBytes)) * 100)
     }
 
-    $verify = Verify-SmartArchive $TarPath $ArchivePath
-
-    return @"
-Archive created successfully.
-
-Source size: $(Format-Bytes $sourceBytes)
-Archive size: $(Format-Bytes $archiveBytes)
-Ratio: $ratio
-Saved: $saved
-
-$verify
-"@
+    $r = Verify-SmartArchive $TarPath $ArchivePath
+    $r[0]='Compress'; $r[1]='Archive created successfully.'; $r[2]=Format-Bytes $sourceBytes; $r[3]=Format-Bytes $archiveBytes; $r[4]=$ratio; $r[5]=$saved; $r[20]=''
+    return $r
 }
 
 # ============================================================================
@@ -2102,6 +2106,7 @@ function Compress-SmartArchive {
 # ============================================================================
 # 10. Worker mode - one config file, temp report/result
 # ============================================================================
+
 if (-not (Test-Blank $WorkerConfigFile)) {
     try {
         $script:workerConfig = Get-Content -LiteralPath $WorkerConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -2123,88 +2128,33 @@ if (-not (Test-Blank $WorkerConfigFile)) {
         if (Test-Blank $internalReport) { throw 'Internal report path is empty.' }
         if (Test-Blank $resultFile) { throw 'Result path is empty.' }
 
+        $targetPath=''; $destinationResult=''
         if ($action -eq 'Compress') {
             if (Test-Blank $destination) { throw 'Worker destination path is empty.' }
-
             Set-BusyStatus 'Starting compression...'
             Compress-SmartArchive $tarPath $source $destination $mode
-
-            try {
-                $summary = Get-ArchiveSummary $tarPath $destination $source
-                Write-ReportFile $internalReport $summary
-                if (-not (Test-Blank $finalReport)) { Copy-Item -LiteralPath $internalReport -Destination $finalReport -Force }
-
-                @{
-                    Success = $true
-                    Action = 'Compress'
-                    InternalReportFile = $internalReport
-                    FinalReportFile = $finalReport
-                    TargetPath = $destination
-                    Mode = $mode
-                } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resultFile -Encoding UTF8
-            }
-            catch {
-                $verifyError = Get-ErrorDetails $_
-                Write-ReportFile $internalReport "Archive created, but verify failed:`r`n$verifyError"
-                if (-not (Test-Blank $finalReport)) { Copy-Item -LiteralPath $internalReport -Destination $finalReport -Force }
-
-                @{
-                    Success = $true
-                    Action = 'Compress'
-                    InternalReportFile = $internalReport
-                    FinalReportFile = $finalReport
-                    TargetPath = $destination
-                    Mode = $mode
-                    VerifyFailed = $true
-                } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resultFile -Encoding UTF8
-            }
+            $targetPath=$destination
+            try { $r = Get-ArchiveSummary $tarPath $destination $source }
+            catch { $e=Get-ErrorDetails $_; $r=@('')*32; $r[0]='Compress'; $r[1]='Archive created successfully.'; $r[20]=''; if(Test-Path -LiteralPath $source){$r[2]=Format-Bytes (Get-SourceSize $source)}; if(Test-Path -LiteralPath $destination){$r[3]=Format-Bytes ([int64](Get-Item -LiteralPath $destination).Length)}; $r[28]="`r`n`r`nArchive created, but verify failed:`r`n$e" }
         }
         elseif ($action -eq 'Extract') {
             if (Test-Blank $destination) { throw 'Worker destination path is empty.' }
-
             Set-BusyStatus 'Starting extraction...'
-            Extract-SmartArchive $tarPath $source $destination $salvage
-
-            $skipped = @($script:lastSalvageSkippedBlocks)
-            $modeText = if ($salvage) { 'Salvage mode: ON' } else { 'Salvage mode: OFF' }
-            $text = "Archive extracted successfully.`r`nArchive: $source`r`nExtraction parent folder: $destination`r`n$modeText"
-
-            if ($salvage -and $skipped.Count -gt 0) {
-                $text += "`r`n`r`nWARNING: Some blocks were skipped.`r`nSkipped blocks: $($skipped.Count)`r`n`r`n$($skipped -join "`r`n`r`n")"
-            }
-            elseif ($salvage) {
-                $text += "`r`n`r`nNo broken blocks were detected. Nothing was skipped."
-            }
-
-            Write-ReportFile $internalReport $text
-            if (-not (Test-Blank $finalReport)) { Copy-Item -LiteralPath $internalReport -Destination $finalReport -Force }
-
-            @{
-                Success = $true
-                Action = 'Extract'
-                InternalReportFile = $internalReport
-                FinalReportFile = $finalReport
-                Destination = $destination
-            } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resultFile -Encoding UTF8
+            $destinationResult=$destination
+            $r = Extract-SmartArchive $tarPath $source $destination $salvage
         }
         elseif ($action -eq 'Verify') {
             Set-BusyStatus 'Starting verification...'
-            $summary = Verify-SmartArchive $tarPath $source
-
-            Write-ReportFile $internalReport $summary
-            if (-not (Test-Blank $finalReport)) { Copy-Item -LiteralPath $internalReport -Destination $finalReport -Force }
-
-            @{
-                Success = $true
-                Action = 'Verify'
-                InternalReportFile = $internalReport
-                FinalReportFile = $finalReport
-                TargetPath = $source
-            } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resultFile -Encoding UTF8
+            $targetPath=$source
+            $r = Verify-SmartArchive $tarPath $source
         }
-        else {
-            throw "Unknown worker action: $action"
-        }
+        else { throw "Unknown worker action: $action" }
+
+        $summary = Format-OperationReport $r
+        Write-ReportFile $internalReport $summary
+        if (-not (Test-Blank $finalReport)) { Copy-Item -LiteralPath $internalReport -Destination $finalReport -Force }
+
+        @{ Success=$true; Action=$action; InternalReportFile=$internalReport; FinalReportFile=$finalReport; TargetPath=$targetPath; Destination=$destinationResult; Mode=$mode } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resultFile -Encoding UTF8
 
         Set-AppStatus 'Done.' ([System.Drawing.Color]::Green)
         exit 0
@@ -2217,11 +2167,7 @@ if (-not (Test-Blank $WorkerConfigFile)) {
                     Write-ReportFile ([string]$script:workerConfig.InternalReportFile) "Operation failed.`r`n`r`n$err"
                 }
                 if (-not (Test-Blank ([string]$script:workerConfig.ResultFile))) {
-                    @{
-                        Success = $false
-                        Action  = ([string]$script:workerConfig.Action)
-                        Error   = $err
-                    } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath ([string]$script:workerConfig.ResultFile) -Encoding UTF8
+                    @{ Success = $false; Action  = ([string]$script:workerConfig.Action); Error = $err } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath ([string]$script:workerConfig.ResultFile) -Encoding UTF8
                 }
             }
         }
