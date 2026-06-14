@@ -1,61 +1,78 @@
-# SmartTAR STAR v1.2.0
+# SmartTAR STAR v1.2.1
 
 ## Release Title
 
-**v1.2.0 - Responsive Analysis Engine, Safer Staging, and STAR Block Optimizations**
+**v1.2.1 - C# Native Analyzer, Faster Smart Planning, and Stable STAR v1.2 Compatibility**
 
 ---
 
 ## Release Notes
 
-SmartTAR STAR v1.2.0 is a stability, performance, and architecture-focused release.
+SmartTAR STAR v1.2.1 is a performance and maintenance release focused on faster content analysis while preserving full compatibility with the STAR v1.2 archive format.
 
-This version significantly improves archive planning, content analysis responsiveness, cross-volume staging behavior, and internal STAR block layout while keeping the original project philosophy intact:
+This release introduces an embedded C# native analyzer for Smart profile planning.  
+The analyzer replaces the previous PowerShell byte-level analysis logic and significantly speeds up file classification on larger datasets.
 
 > SmartTAR is not a custom compression engine.  
-> It is a smart PowerShell wrapper and STAR container orchestrator built on top of Windows `tar.exe` / `bsdtar`.
+> It is a smart PowerShell GUI wrapper and STAR container orchestrator built on top of Windows `tar.exe` / `bsdtar`.
 
-The goal of v1.2.0 is to get more practical value from the built-in Windows archiving backend through smarter data grouping, safer staging, better verification, and cleaner internal structure.
+The archive format, manifest structure, block layout, verification logic, and extraction behavior remain compatible with STAR v1.2.
 
 ---
 
-## Key Features & Architectural Improvements
-
-### 1. CPU-Aware Parallel Content Analysis
-
-Previous versions performed content analysis sequentially.  
-On larger datasets, this made the planning phase noticeably slower.
-
-SmartTAR STAR v1.2.0 introduces parallel content analysis using a PowerShell `RunspacePool`.
-
-The parallel analysis covers:
+## Main Highlights
 
 ```text
-magic byte detection
+embedded C# native content analyzer
+much faster Smart profile planning
+legacy PowerShell byte analyzer removed
+same STAR v1.2 archive format
+same manifest and block layout
+same Verify / Extract compatibility
+tested Smart, Balanced, Store and Extract workflows
+```
+
+---
+
+## C# Native Analyzer
+
+Previous SmartTAR versions performed byte-level content analysis in PowerShell.
+
+SmartTAR STAR v1.2.1 moves the expensive byte analysis logic into embedded C# code.
+
+The native analyzer handles:
+
+```text
 sample reading
-byte entropy calculation
-zero-byte ratio calculation
+magic byte detection
+zero-byte counting
 unique byte counting
-text / binary / store-like classification
+entropy calculation
+text / binary / archive-like classification
 ```
 
-To avoid overloading smaller systems, the worker count is automatically limited using a safe CPU-aware scale:
+This makes the `Smart - max compression` planning phase significantly faster, especially when analyzing many files.
+
+PowerShell remains responsible for:
 
 ```text
-≤ 2 logical threads  → 1 worker
-≤ 4 logical threads  → 2 workers
-> 4 logical threads  → 4 workers
+GUI
+workflow orchestration
+staging
+tar.exe / bsdtar execution
+manifest generation
+verification
+extraction
+reporting
 ```
-
-This improves Smart profile planning speed while keeping the system responsive.
 
 ---
 
-### 2. Improved Smart Profile Behavior
+## Smart Profile Behavior
 
-The `Smart - max compression` profile now uses full content analysis and a clear max-compression strategy.
+The `Smart - max compression` profile still uses full content analysis.
 
-Current Smart profile block strategy:
+Current Smart strategy:
 
 ```text
 structure → XZ9
@@ -65,55 +82,14 @@ binary    → XZ9
 archives  → STORE
 ```
 
-Already-compressed or archive-like data is stored without unnecessary recompression, while compressible data is grouped and compressed using XZ9.
+Archive-like or already-compressed data is stored without unnecessary recompression.  
+Compressible data is grouped and compressed using XZ9.
 
 ---
 
-### 3. Compressed STAR Structure Block
+## Compression Profiles
 
-The internal directory structure block is now compressed using XZ9 when available.
-
-Old internal layout:
-
-```text
-000001_structure.tar
-```
-
-New internal layout:
-
-```text
-000001_structure.tar.xz
-```
-
-A safe fallback to STORE remains available if XZ9 structure block creation fails.
-
-In validation testing, the structure block was reduced from approximately:
-
-```text
-120 KB → 2.5 KB
-```
-
-while archive verification remained successful.
-
----
-
-### 4. Safer Cross-Volume Staging Behavior
-
-SmartTAR continues to prefer hardlink-based staging where possible.
-
-When hardlinks are not available, for example during cross-volume operations, SmartTAR can fall back to copy-based staging instead of immediately fragmenting the archive into many small chunked blocks.
-
-The chunked fallback remains available as a last-resort safeguard.
-
-This improves stability when working across different disks, volumes, or more restrictive filesystem environments.
-
----
-
-### 5. Cleaner Compression Profiles
-
-The user-facing compression profiles were simplified and clarified.
-
-Current profiles:
+Available profiles:
 
 ```text
 Balanced - mixed blocks
@@ -122,77 +98,20 @@ Solid - single block
 Store - no compression
 ```
 
-Older internal naming such as `Hybrid` and `SmartXZ` has been removed from the user-facing workflow.
-
 ---
 
-### 6. Shorter Runtime Status Messages
+## STAR Format Compatibility
 
-Long runtime progress messages were simplified.
+SmartTAR STAR v1.2.1 does not change the STAR archive format.
 
-Example:
-
-```text
-Analyzing content...
-```
-
-This keeps the GUI cleaner and easier to read during longer operations.
-
----
-
-### 7. More Compact Stable Report Output
-
-The final report was cleaned up for stable use.
-
-The report now focuses on the most important information:
+The internal format remains:
 
 ```text
-Compression groups
-Compression method summary
-Analysis diagnostics
-Verification result
+formatVersion = 1
+model = STAR v1.2
 ```
 
-Verbose development diagnostics were removed from the stable output, including:
-
-```text
-entropy summary
-unique byte summary
-heuristic matrix commentary
-compression preference branch listing
-```
-
----
-
-## Validation Summary
-
-SmartTAR STAR v1.2.0 was validated across all main profiles:
-
-```text
-Smart - max compression   OK
-Balanced - mixed blocks   OK
-Solid - single block      OK
-Store - no compression    OK
-Verify                    OK
-```
-
-Example validation result using the Smart profile:
-
-```text
-Source size: 415.37 MB
-Archive size: 140.79 MB
-Ratio: 33.89 %
-Saved: 66.11 %
-Verification: OK
-```
-
-The Smart profile result confirms that the updated block layout and compressed structure block work correctly while preserving archive integrity.
-
----
-
-## Internal STAR Layout
-
-A typical Smart profile archive now uses an internal block layout similar to:
+A typical Smart archive layout may contain:
 
 ```text
 manifest.json
@@ -204,7 +123,7 @@ blocks/
   000005_binary.tar.xz
 ```
 
-Each internal block remains a standard tar-compatible unit:
+Each block remains a standard tar-compatible unit:
 
 ```text
 .tar
@@ -225,9 +144,35 @@ salvage-friendly structure
 
 ---
 
+## Validation Summary
+
+SmartTAR STAR v1.2.1 was validated across the main workflows:
+
+```text
+Smart - max compression   OK
+Balanced - mixed blocks   OK
+Store - no compression    OK
+Verify                    OK
+Extract                   OK
+```
+
+The C# analyzer was also compared against the previous PowerShell analyzer and produced matching classification results on tested datasets.
+
+Example validation result:
+
+```text
+Source size: 415.37 MB
+Archive size: 140.79 MB
+Ratio: 33.89 %
+Saved: 66.11 %
+Verification: OK
+```
+
+---
+
 ## Design Philosophy
 
-SmartTAR STAR is not intended to replace specialized commercial compression engines.
+SmartTAR STAR is not intended to replace specialized compression engines.
 
 Instead, SmartTAR focuses on:
 
@@ -241,24 +186,23 @@ salvage-friendly archive layout
 no external compressor dependencies
 ```
 
-The result is a practical, dependency-light STAR container format that gets more out of the built-in Windows tar engine through better orchestration.
+SmartTAR gets more practical value from the built-in Windows archiving backend through better orchestration.
 
 ---
 
 ## Summary
 
-SmartTAR STAR v1.2.0 improves performance, stability, and internal archive structure while preserving the original lightweight wrapper design.
+SmartTAR STAR v1.2.1 is a faster and cleaner maintenance release for the STAR v1.2 line.
 
-Main highlights:
+Main improvements:
 
 ```text
-CPU-aware parallel content analysis
-safer staging behavior
-compressed structure block
-cleaner compression profiles
-shorter GUI progress messages
-simplified stable reports
-verified STAR archive integrity
+C# native analyzer
+faster Smart planning
+removed legacy PowerShell byte analyzer
+same STAR v1.2 compatibility
+verified archive integrity
+stable Verify / Extract behavior
 ```
 
-This release is considered the stable v1.2 baseline.
+This release is the recommended stable v1.2.x build.
