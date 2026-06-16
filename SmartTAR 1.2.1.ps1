@@ -960,8 +960,7 @@ function Get-SmartGroupName {
 function Get-ModeGroupName {
     param([string]$Mode, [string]$SmartGroup)
     if ($Mode -eq 'Solid') { return 'solid' }
-    if ($Mode -eq 'Store') { return 'store' }
-    if ($Mode -eq 'Balanced') {
+    if ($Mode -eq 'Balanced' -or $Mode -eq 'Store') {
         if ($SmartGroup -eq 'diskimage') { return 'diskimage' }
         if ($SmartGroup -eq 'media' -or $SmartGroup -eq 'archives') { return 'stored' }
         return 'compressible'
@@ -969,15 +968,11 @@ function Get-ModeGroupName {
     return $SmartGroup
 }
 
+
 function Get-AnalysisScopeForMode {
     param([string]$Mode)
-    switch ([string]$Mode) {
-        'Store' { return 'None' }
-        'Smart' { return 'FullAnalyze' }
-        'Balanced' { return 'UnknownOnly' }
-        'Solid' { return 'UnknownOnly' }
-        default { return 'UnknownOnly' }
-    }
+
+    if ($Mode -eq 'Smart') { 'FullAnalyze' } else { 'UnknownOnly' }
 }
 function Get-CompressionPreferenceForMode {
     param([string]$Mode)
@@ -1165,7 +1160,6 @@ function New-ArchiveGroups {
     $preference = Get-CompressionPreferenceForMode $Mode
     $groups = [ordered]@{}
     switch ($Mode) {
-        'Store' { $groups.store = New-GroupInfo store $store 'Store mode.' }
         'Solid' { $groups.solid = New-GroupInfo solid (Select-AutoSolidMethod $Capabilities $Profile) 'Auto solid method.' }
         'Smart' {
             $binaryMethod = if ($preference -eq 'MaxCompression') { $xz } else { $zstd }
@@ -1179,9 +1173,14 @@ function New-ArchiveGroups {
             $groups.unknown    = New-GroupInfo unknown    $xz           'Unknown data prefers XZ9.'
         }
         default {
-            $groups.compressible = New-GroupInfo compressible $xz    'General compressible data prefers XZ9.'
-            $groups.diskimage    = New-GroupInfo diskimage    $zstd  'Disk images prefer ZSTD19.'
-            $groups.stored       = New-GroupInfo stored       $store 'Media and archive-like data is stored.'
+            $compressibleMethod = if ($Mode -eq 'Store') { $store } else { $xz }
+            $diskimageMethod    = if ($Mode -eq 'Store') { $store } else { $zstd }
+            $generalReason      = if ($Mode -eq 'Store') { 'General data stored without compression.' } else { 'General compressible data prefers XZ9.' }
+            $diskReason         = if ($Mode -eq 'Store') { 'Disk images stored without compression.' } else { 'Disk images prefer ZSTD19.' }
+            $storedReason       = if ($Mode -eq 'Store') { 'Media and archive-like data stored without compression.' } else { 'Media and archive-like data is stored.' }
+            $groups.compressible = New-GroupInfo compressible $compressibleMethod $generalReason
+            $groups.diskimage    = New-GroupInfo diskimage    $diskimageMethod    $diskReason
+            $groups.stored       = New-GroupInfo stored       $store              $storedReason
         }
     }
     return $groups
