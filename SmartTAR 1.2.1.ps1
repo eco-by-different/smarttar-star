@@ -968,9 +968,9 @@ function Get-ModeGroupName {
     return $SmartGroup
 }
 
-
 function Get-AnalysisScopeForMode {
     param([string]$Mode)
+
     if ($Mode -eq 'Smart') { 'FullAnalyze' } else { 'UnknownOnly' }
 }
 function Get-CompressionPreferenceForMode {
