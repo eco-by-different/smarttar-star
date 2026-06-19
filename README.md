@@ -22,8 +22,9 @@ The analyzer replaces the previous PowerShell byte-level analysis logic and sign
 The archive format, manifest structure, block layout, verification logic, and extraction behavior remain compatible with STAR v1.2.
 
 ---
+# Antivirus Notice (False Positives)
 
-Antivirus Notice (False Positives): The .exe binary is generated using PS2EXE, which some sensitive antivirus engines (like Windows Defender or Machine Learning models) may flags as a false positive. 
+The .exe binary is generated using PS2EXE, which some sensitive antivirus engines (like Windows Defender or Machine Learning models) may flag it as a false positive. 
 The underlying script is 100% clean. If your system blocks the .exe, you can safely run the raw SmartTAR.ps1 script instead.
 
 ---
