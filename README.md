@@ -23,6 +23,11 @@ The archive format, manifest structure, block layout, verification logic, and ex
 
 ---
 
+Antivirus Notice (False Positives): The .exe binary is generated using PS2EXE, which some sensitive antivirus engines (like Windows Defender or Machine Learning models) may flags as a false positive. 
+The underlying script is 100% clean. If your system blocks the .exe, you can safely run the raw SmartTAR.ps1 script instead.
+
+---
+
 ## Screenshot
 
 ![SmartTAR screenshot](docs/images/smarttar-gui.png)
