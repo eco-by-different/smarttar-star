@@ -90,11 +90,12 @@ The `Smart - max compression` profile still uses full content analysis.
 Current Smart strategy:
 
 ```text
-structure → XZ9
-text      → XZ9
-unknown   → XZ9
-binary    → XZ9
-archives  → STORE
+Each block is then handled differently based on its type:
+- structure, unknown, & binary data → XZ9 or ZSTD19 (for maximum density)
+- text data                         → XZ9 or ZSTD9 (balanced for text structures)
+- already compressed archives       → STORE (stored directly without recompression)
+
+This avoids wasting CPU on things like videos or ZIPs.
 ```
 
 Archive-like or already-compressed data is stored without unnecessary recompression.  
