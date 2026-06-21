@@ -737,6 +737,9 @@ $script:analysisScope = 'None'
 $script:compressionPreference = 'Balanced'
 $script:adaptiveDeepAnalyze = $false
 $script:adaptiveStats = $null
+$script:EnableFileDedup = $true
+$script:DedupMinFileBytes = 64KB
+$script:dedupStats = $null
 
 $scriptDir = if ($PSScriptRoot) {
     $PSScriptRoot
@@ -1200,17 +1203,89 @@ function Get-SafeStageRelativePath {
 }
 
 function Add-FileToGroup {
-    param([hashtable]$Group, [string]$SourcePath, [string]$RelativePath, [int64]$Bytes)
+    param([hashtable]$Group, [string]$SourcePath, [string]$RelativePath, [int64]$Bytes, [string]$LinkTarget = '')
 
     $fileInfo = [pscustomobject]@{
-        Path  = $SourcePath
-        Rel   = (Convert-ToTarPath $RelativePath)
-        Bytes = [int64]$Bytes
+        Path       = $SourcePath
+        Rel        = (Convert-ToTarPath $RelativePath)
+        Bytes      = [int64]$Bytes
+        LinkTarget = [string]$LinkTarget
     }
 
     [void]$Group.Files.Add($fileInfo)
     $Group.FileCount = [int]$Group.FileCount + 1
     $Group.Bytes = [int64]$Group.Bytes + [int64]$Bytes
+}
+
+function New-FileDedupStats {
+    return [ordered]@{
+        enabled = [bool]$script:EnableFileDedup
+        mode = 'file-level-hardlink-stage'
+        minFileBytes = [int64]$script:DedupMinFileBytes
+        candidates = 0
+        candidateBytes = [int64]0
+        hashedFiles = 0
+        duplicateFiles = 0
+        duplicateBytes = [int64]0
+        uniqueFingerprints = 0
+        skippedSmallFiles = 0
+        skippedSmallBytes = [int64]0
+        errors = 0
+    }
+}
+
+function Register-FileDedupCandidate {
+    param($File, [string]$RelativePath, [hashtable]$State)
+
+    if ($null -eq $script:dedupStats) { $script:dedupStats = New-FileDedupStats }
+    if (-not [bool]$script:EnableFileDedup) { return '' }
+    if ($null -eq $File) { return '' }
+
+    $bytes = [int64]$File.Length
+    if ($bytes -le 0 -or $bytes -lt [int64]$script:DedupMinFileBytes) {
+        $script:dedupStats.skippedSmallFiles = [int]$script:dedupStats.skippedSmallFiles + 1
+        $script:dedupStats.skippedSmallBytes = [int64]$script:dedupStats.skippedSmallBytes + $bytes
+        return ''
+    }
+
+    $script:dedupStats.candidates = [int]$script:dedupStats.candidates + 1
+    $script:dedupStats.candidateBytes = [int64]$script:dedupStats.candidateBytes + $bytes
+
+    $lengthKey = [string]$bytes
+    if (-not $State.ContainsKey($lengthKey)) {
+        $list = New-Object System.Collections.ArrayList
+        [void]$list.Add([pscustomobject]@{ Path=[string]$File.FullName; Rel=(Convert-ToTarPath $RelativePath); Hash='' })
+        $State[$lengthKey] = $list
+        $script:dedupStats.uniqueFingerprints = [int]$script:dedupStats.uniqueFingerprints + 1
+        return ''
+    }
+
+    try {
+        $entries = $State[$lengthKey]
+        $currentHash = Get-FileSHA256 ([string]$File.FullName)
+        $script:dedupStats.hashedFiles = [int]$script:dedupStats.hashedFiles + 1
+
+        foreach ($entry in @($entries)) {
+            if (Test-Blank ([string]$entry.Hash)) {
+                $entry.Hash = Get-FileSHA256 ([string]$entry.Path)
+                $script:dedupStats.hashedFiles = [int]$script:dedupStats.hashedFiles + 1
+            }
+
+            if ([string]$entry.Hash -eq $currentHash) {
+                $script:dedupStats.duplicateFiles = [int]$script:dedupStats.duplicateFiles + 1
+                $script:dedupStats.duplicateBytes = [int64]$script:dedupStats.duplicateBytes + $bytes
+                return [string]$entry.Path
+            }
+        }
+
+        [void]$entries.Add([pscustomobject]@{ Path=[string]$File.FullName; Rel=(Convert-ToTarPath $RelativePath); Hash=$currentHash })
+        $script:dedupStats.uniqueFingerprints = [int]$script:dedupStats.uniqueFingerprints + 1
+        return ''
+    }
+    catch {
+        $script:dedupStats.errors = [int]$script:dedupStats.errors + 1
+        return ''
+    }
 }
 
 function Invoke-ParallelAdaptiveAnalysis {
@@ -1288,6 +1363,7 @@ function Stage-FilesPlan {
     $profileName = Get-CompressionProfileDisplayName $Mode $script:compressionPreference
     $script:adaptiveDeepAnalyze = Test-ContentAnalysisEnabled $script:analysisScope
     $script:adaptiveStats = New-AdaptiveStats
+    $script:dedupStats = New-FileDedupStats
     Set-BusyStatus "Planning blocks: $profileName..."
     $files = @(Get-SortedSourceFiles $SourceItem $Source $BaseRoot)
     $plans = New-Object System.Collections.ArrayList
@@ -1313,6 +1389,7 @@ function Stage-FilesPlan {
             $analysisResults = Invoke-ParallelAdaptiveAnalysis -Targets @($analysisTargets) -MaxParallel $maxParallel -SampleBytes ([int]$script:AdaptiveSampleBytes)
         }
     }
+    $dedupState = @{}
     foreach ($plan in $plans) {
         $file = $plan.File
         $smartGroup = [string]$plan.SmartGroup
@@ -1328,7 +1405,8 @@ function Stage-FilesPlan {
         if (-not $Groups.Contains($groupName)) { throw "Internal grouping error. Group '$groupName' does not exist for mode '$Mode'." }
         $relativePath = Get-RelativePathFromBase $BaseRoot $file.FullName
         $relativePath = Get-SafeStageRelativePath $relativePath ([System.IO.Path]::GetFileName($file.FullName))
-        Add-FileToGroup $Groups[$groupName] $file.FullName $relativePath ([int64]$file.Length)
+        $linkTarget = Register-FileDedupCandidate $file $relativePath $dedupState
+        Add-FileToGroup $Groups[$groupName] $file.FullName $relativePath ([int64]$file.Length) $linkTarget
     }
 }
 
@@ -1442,6 +1520,9 @@ function New-HardlinkStageInternal {
 
         $linkPath = Join-Path $stageRoot (Convert-ToLocalPath $relTar)
         $targetPath = [string]$file.Path
+        if (-not (Test-Blank ([string]$file.LinkTarget))) {
+            $targetPath = [string]$file.LinkTarget
+        }
 
         try {
             New-HardLinkLiteral $linkPath $targetPath
@@ -1653,6 +1734,7 @@ function Build-Manifest {
         sourceBytes = Get-SourceSize $Source
         sourceProfile = $Profile
         adaptiveDiagnostics = $script:adaptiveStats
+        fileDedupDiagnostics = $script:dedupStats
         blocks = @($Blocks)
     }
 }
@@ -1773,6 +1855,27 @@ function Format-CompressionMethodSummary {
     }catch{return ''}
 }
 
+function Format-FileDedupDiagnostics {
+    param($Manifest)
+    try {
+        $dedup = $Manifest.fileDedupDiagnostics
+        if ($null -eq $dedup) { return '' }
+        $lines = @('', 'File dedup diagnostics:')
+        if (-not ([bool]$dedup.enabled)) {
+            $lines += 'File dedup: OFF'
+            return ($lines -join "`r`n")
+        }
+        $lines += ('File dedup: ON - duplicate files are staged as hardlinks when possible.')
+        $lines += ('Minimum dedup size: {0}' -f (Format-Bytes ([int64]$dedup.minFileBytes)))
+        $lines += ('Dedup candidates: {0} files, source={1}' -f ([int]$dedup.candidates), (Format-Bytes ([int64]$dedup.candidateBytes)))
+        $lines += ('Duplicate files detected: {0}, duplicate source={1}' -f ([int]$dedup.duplicateFiles), (Format-Bytes ([int64]$dedup.duplicateBytes)))
+        if ([int]$dedup.hashedFiles -gt 0) { $lines += ('Files hashed for dedup: {0}' -f ([int]$dedup.hashedFiles)) }
+        if ([int]$dedup.errors -gt 0) { $lines += ('Dedup hash/stage planning errors: {0}' -f ([int]$dedup.errors)) }
+        return ($lines -join "`r`n")
+    }
+    catch { return '' }
+}
+
 function Format-AdaptiveDiagnostics {
     param($Manifest)
     try {
@@ -1789,6 +1892,8 @@ function Format-AdaptiveDiagnostics {
         $lines += ('Analysis scope: {0}' -f $scope)
         if ($null -eq $diag -or -not ([bool]$diag.enabled)) {
             $lines += 'Content analysis: OFF - selected profile does not analyze file content.'
+            $dedupText = Format-FileDedupDiagnostics $Manifest
+            if (-not (Test-Blank $dedupText)) { $lines += $dedupText }
             return ($lines -join "`r`n")
         }
         if ($scope -eq 'FullAnalyze') { $lines += 'Content analysis: ON - all files.' }
@@ -1814,6 +1919,8 @@ function Format-AdaptiveDiagnostics {
         $zeroBytes = [int64]$diag.zeroBytes
         if ($zeroSampleBytes -gt 0) { $lines += ('Zero-byte sample ratio: {0:N2} %' -f ((([double]$zeroBytes / [double]$zeroSampleBytes) * 100.0))) }
         if ([int]$diag.errors -gt 0) { $lines += ('Analysis errors: {0}' -f ([int]$diag.errors)) }
+        $dedupText = Format-FileDedupDiagnostics $Manifest
+        if (-not (Test-Blank $dedupText)) { $lines += $dedupText }
         return ($lines -join "`r`n")
     }
     catch { return '' }
@@ -2288,7 +2395,9 @@ function Start-WorkerOperation {
         $reportBase = $DestinationPath
     }
     elseif ($Action -eq 'Extract' -and -not (Test-Blank $DestinationPath)) {
-        $reportBase = Join-Path $DestinationPath 'SmartTAR_extract'
+        $archiveName = Get-ArchiveBaseNameWithoutSmartExtension $SourcePath
+        if (Test-Blank $archiveName) { $archiveName = 'SmartTAR_extract' }
+        $reportBase = Join-Path $DestinationPath $archiveName
     }
     else {
         $reportBase = $SourcePath
@@ -2309,6 +2418,9 @@ $script:analysisScope = 'None'
 $script:compressionPreference = 'Balanced'
 $script:adaptiveDeepAnalyze = $false
 $script:adaptiveStats = $null
+$script:EnableFileDedup = $true
+$script:DedupMinFileBytes = 64KB
+$script:dedupStats = $null
 
     'Starting...' | Set-Content -LiteralPath $script:currentStatusFile -Encoding UTF8
 
@@ -2538,7 +2650,7 @@ $cmbMode = New-UiObject 'System.Windows.Forms.ComboBox' @{
 [void]$cmbMode.Items.Add('Store - no compression')
 $cmbMode.SelectedIndex = 0
 
-$lblInfo = New-EcoLabel 'STAR v1.2.1 C# native analyzer build.' 20 252 465 20 $fItalic ([System.Drawing.Color]::DimGray)
+$lblInfo = New-EcoLabel 'STAR v1.2.1 C# native analyzer + file dedup build.' 20 252 465 20 $fItalic ([System.Drawing.Color]::DimGray)
 $btnCompress = New-EcoButton 'COMPRESS' 20 287 150 42 $fBold ([System.Drawing.Color]::SeaGreen) $cButtonText
 $btnExtract  = New-EcoButton 'EXTRACT' 177 287 150 42 $fBold ([System.Drawing.Color]::SteelBlue) $cButtonText
 $btnVerify   = New-EcoButton 'VERIFY' 334 287 151 42 $fBold ([System.Drawing.Color]::DarkSlateGray) $cButtonText
