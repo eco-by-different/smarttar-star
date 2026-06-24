@@ -42,9 +42,8 @@ If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` scri
 
 ## Screenshot
 
-```text
-docs/images/smarttar-gui.png
-```
+
+![SmartTAR screenshot](docs/images/smarttar-gui.png)
 
 ---
 
