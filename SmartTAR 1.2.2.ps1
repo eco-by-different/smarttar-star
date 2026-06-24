@@ -476,11 +476,19 @@ function Test-DirectoryWritable {
 }
 function Get-SmartTarStandardTempCandidates {
     $list = New-Object System.Collections.Generic.List[string]
-    try { $programData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData); if (-not (Test-Blank $programData)) { [void]$list.Add((Join-Path $programData 'SmartTAR\Temp')) } } catch {}
-    if (-not (Test-Blank $env:PUBLIC)) { [void]$list.Add((Join-Path $env:PUBLIC 'SmartTAR_Temp')) }
-    try { $systemTemp = [System.IO.Path]::GetTempPath(); if (-not (Test-Blank $systemTemp)) { [void]$list.Add((Join-Path $systemTemp 'SmartTAR')) } } catch {}
+
+    # User-scoped temp locations only. SmartTAR intentionally does not use
+    # system-wide common application data for new work roots.
+    try {
+        $systemTemp = [System.IO.Path]::GetTempPath()
+        if (-not (Test-Blank $systemTemp)) { [void]$list.Add((Join-Path $systemTemp 'SmartTAR')) }
+    }
+    catch {
+    }
+
     if (-not (Test-Blank $env:TEMP)) { [void]$list.Add((Join-Path $env:TEMP 'SmartTAR')) }
     if (-not (Test-Blank $env:TMP))  { [void]$list.Add((Join-Path $env:TMP  'SmartTAR')) }
+
     return @($list | Select-Object -Unique)
 }
 function Get-SmartTarWritableStandardTempRoot {
