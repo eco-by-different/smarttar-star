@@ -732,6 +732,22 @@ function Get-SafeWorkerCount {
     return 4
 }
 
+function Reset-SmartTarRuntimeState {
+    $script:ToolVersion = '1.2.2'
+    $script:FormatName = 'STAR'
+    $script:FormatVersion = 1
+    $script:ArchiveExtension = '.star'
+    $script:AdaptiveSampleBytes = 1MB
+    $script:MaxParallelAnalysis = Get-SafeWorkerCount
+    $script:analysisScope = 'None'
+    $script:compressionPreference = 'Balanced'
+    $script:adaptiveDeepAnalyze = $false
+    $script:adaptiveStats = $null
+    $script:EnableFileDedup = $true
+    $script:DedupMinFileBytes = 64KB
+    $script:dedupStats = $null
+}
+
 function Set-BusyStatus {
     param([string]$Text)
     Set-AppStatus $Text ([System.Drawing.Color]::DarkOrange)
@@ -755,19 +771,7 @@ $script:currentAction = ''
 $script:openFolderAfter = $true
 $script:currentStdOut = ''
 $script:currentStdErr = ''
-$script:ToolVersion = '1.2.2'
-$script:FormatName = 'STAR'
-$script:FormatVersion = 1
-$script:ArchiveExtension = '.star'
-$script:AdaptiveSampleBytes = 1MB
-$script:MaxParallelAnalysis = Get-SafeWorkerCount
-$script:analysisScope = 'None'
-$script:compressionPreference = 'Balanced'
-$script:adaptiveDeepAnalyze = $false
-$script:adaptiveStats = $null
-$script:EnableFileDedup = $true
-$script:DedupMinFileBytes = 64KB
-$script:dedupStats = $null
+Reset-SmartTarRuntimeState
 $script:IncludeDebugDiagnosticsInManifest = $false
 $script:ExportDebugBundle = $false
 $script:KeepDebugArtifacts = $false
@@ -2656,19 +2660,7 @@ function Start-WorkerOperation {
     $script:openFolderAfter = [bool]$chkOpenFolder.Checked
     $script:currentStdOut = ''
     $script:currentStdErr = ''
-$script:ToolVersion = '1.2.2'
-$script:FormatName = 'STAR'
-$script:FormatVersion = 1
-$script:ArchiveExtension = '.star'
-$script:AdaptiveSampleBytes = 1MB
-$script:MaxParallelAnalysis = Get-SafeWorkerCount
-$script:analysisScope = 'None'
-$script:compressionPreference = 'Balanced'
-$script:adaptiveDeepAnalyze = $false
-$script:adaptiveStats = $null
-$script:EnableFileDedup = $true
-$script:DedupMinFileBytes = 64KB
-$script:dedupStats = $null
+Reset-SmartTarRuntimeState
 
     'Starting...' | Set-Content -LiteralPath $script:currentStatusFile -Encoding UTF8
 
