@@ -17,7 +17,7 @@
     <Contact_Info>
       <Author_First_Name>Jan</Author_First_Name>
       <Author_Last_Name>Simak</Author_Last_Name>
-      <Author_Email>CHANGE_ME@example.com</Author_Email>
+      <Author_Email>differentchange@seznam.cz</Author_Email>
       <Contact_First_Name>Jan</Contact_First_Name>
       <Contact_Last_Name>Simak</Contact_Last_Name>
       <Contact_Email>differentchange@seznam.cz</Contact_Email>
@@ -26,7 +26,7 @@
 
   <Program_Info>
     <Program_Name>SmartTAR - STAR</Program_Name>
-    <Program_Version>SmartTAR - STAR 1.2.2</Program_Version>
+    <Program_Version>1.2.2</Program_Version>
     <Program_Release_Month>24</Program_Release_Month>
     <Program_Release_Day>6</Program_Release_Day>
     <Program_Release_Year>2026</Program_Release_Year>
@@ -63,7 +63,7 @@
       <Application_XML_File_URL>https://raw.githubusercontent.com/eco-by-different/smarttar-star/main/smarttar-star-pad.xml</Application_XML_File_URL>
     </Application_URLs>
     <Download_URLs>
-      <Primary_Download_URL>https://github.com/eco-by-different/smarttar-star/releases/latest</Primary_Download_URL>
+      <Primary_Download_URL>https://github.com/eco-by-different/smarttar-star/releases/download/SmartTAR/SmartTAR.1.2.2.exe</Primary_Download_URL>
       <Secondary_Download_URL>https://github.com/eco-by-different/smarttar-star</Secondary_Download_URL>
       <Additional_Download_URL_1>https://github.com/eco-by-different</Additional_Download_URL_1>
       <Additional_Download_URL_2></Additional_Download_URL_2>
