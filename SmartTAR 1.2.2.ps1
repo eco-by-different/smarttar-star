@@ -330,6 +330,7 @@ if ([string]::IsNullOrWhiteSpace($WorkerConfigFile)) {
 # ============================================================================
 # 02. Generic helpers
 # ============================================================================
+
 function Test-Blank {
     param([string]$Text)
     return [string]::IsNullOrWhiteSpace($Text)
@@ -463,6 +464,7 @@ function Get-ReportPath {
     if (Test-Blank $name) { $name = 'SmartTAR' }
     return (Join-Path $dir ("$name.$Kind.$(Get-Date -Format yyyyMMdd_HHmmss).txt"))
 }
+
 function Test-DirectoryWritable {
     param([string]$Path)
     try {
@@ -474,6 +476,7 @@ function Test-DirectoryWritable {
         return $true
     } catch { return $false }
 }
+
 function Get-SmartTarStandardTempCandidates {
     $list = New-Object System.Collections.Generic.List[string]
 
@@ -491,6 +494,7 @@ function Get-SmartTarStandardTempCandidates {
 
     return @($list | Select-Object -Unique)
 }
+
 function Get-SmartTarWritableStandardTempRoot {
     param([string]$SubFolder = '')
     foreach ($candidate in Get-SmartTarStandardTempCandidates) {
@@ -502,6 +506,7 @@ function Get-SmartTarWritableStandardTempRoot {
     }
     throw 'Unable to find a writable SmartTAR temp folder.'
 }
+
 function New-WorkRootAtBase {
     param([string]$Purpose, [string]$BasePath)
     if (Test-Blank $BasePath) { throw 'Work root base path is empty.' }
@@ -511,6 +516,7 @@ function New-WorkRootAtBase {
     [System.IO.Directory]::CreateDirectory($work) | Out-Null
     return $work
 }
+
 function New-CompressionWorkRoot {
     param([string]$Source, [string]$Destination)
 
@@ -545,6 +551,7 @@ function New-CompressionWorkRoot {
         throw "Unable to create destination-local SmartTAR workroot near destination '$Destination'. $($_.Exception.Message)"
     }
 }
+
 function Get-SafeReportPath {
     param([string]$BasePath, [string]$Kind)
     try {
@@ -650,6 +657,7 @@ function Wait-FileReady {
 # ============================================================================
 # 03. Temp cleanup and safe work folder
 # ============================================================================
+
 function Remove-SmartTarTempFolder {
     param([string]$Path)
 
@@ -967,13 +975,17 @@ function Test-TarCapabilities {
 }
 
 function Select-BestCompressedMethod { param([hashtable]$Capabilities) foreach ($name in @('xz9','zstd19','store')) { if ($Capabilities.ContainsKey($name) -and $Capabilities[$name]) { return Get-TarMethodByName $name } } throw 'No usable tar method found.' }
+
 function Select-XzOrBest { param([hashtable]$Capabilities) if ($Capabilities.ContainsKey('xz9') -and $Capabilities['xz9']) { return Get-TarMethodByName 'xz9' }; return Select-BestCompressedMethod $Capabilities }
+
 function Select-ZstdOrBest { param([hashtable]$Capabilities) if ($Capabilities.ContainsKey('zstd19') -and $Capabilities['zstd19']) { return Get-TarMethodByName 'zstd19' }; return Select-BestCompressedMethod $Capabilities }
+
 function Select-StoreMethod { param([hashtable]$Capabilities) if ($Capabilities.ContainsKey('store') -and $Capabilities['store']) { return Get-TarMethodByName 'store' }; return Select-BestCompressedMethod $Capabilities }
 
 # ============================================================================
 # 06. Classification and grouping
 # ============================================================================
+
 function Get-SmartGroupName {
     param([string]$FilePath)
 
@@ -1011,6 +1023,7 @@ function Get-AnalysisScopeForMode {
 
     if ($Mode -eq 'Smart') { 'FullAnalyze' } else { 'UnknownOnly' }
 }
+
 function Get-CompressionPreferenceForMode {
     param([string]$Mode)
     switch ([string]$Mode) {
@@ -1018,6 +1031,7 @@ function Get-CompressionPreferenceForMode {
         default { return 'Balanced' }
     }
 }
+
 function Get-CompressionProfileDisplayName {
     param([string]$Mode, [string]$Preference)
     switch ([string]$Mode) {
@@ -1028,7 +1042,9 @@ function Get-CompressionProfileDisplayName {
         default { return [string]$Mode }
     }
 }
+
 function Test-ContentAnalysisEnabled { param([string]$Scope) return (([string]$Scope) -ne 'None') }
+
 function Test-ShouldAnalyzeFileContent {
     param([string]$Scope, [string]$SmartGroup)
     switch ([string]$Scope) {
@@ -1037,6 +1053,7 @@ function Test-ShouldAnalyzeFileContent {
         default { return $false }
     }
 }
+
 function Invoke-NativeAdaptiveAnalysis {
     param($File)
 
@@ -1086,6 +1103,7 @@ function New-AdaptiveStats {
         uniqueCount=0; uniqueSum=[int64]0; uniqueMin=257; uniqueMax=0
     }
 }
+
 function Add-AdaptiveDecisionStat {
     param([string]$Decision,[int64]$Bytes,[bool]$Error=$false,[int64]$SampleBytes=0,[int64]$ZeroBytes=0,[bool]$EntropyAvailable=$false,[double]$Entropy=0.0,[bool]$UniqueAvailable=$false,[int]$UniqueBytes=0)
     if($null -eq $script:adaptiveStats){$script:adaptiveStats=New-AdaptiveStats}
@@ -1112,6 +1130,7 @@ function Add-AdaptiveDecisionStat {
         default {$script:adaptiveStats.stayedUnknown=[int]$script:adaptiveStats.stayedUnknown+1; $script:adaptiveStats.stayedUnknownBytes=[int64]$script:adaptiveStats.stayedUnknownBytes+$Bytes}
     }
 }
+
 function Get-AdaptiveSmartGroupName {
     param($File)
     try {
@@ -1322,6 +1341,7 @@ function Register-FileDedupCandidate {
         return ''
     }
 }
+
 function Initialize-SmartTarPlanningArtifacts {
     param([string]$WorkRoot)
 
@@ -1893,6 +1913,7 @@ function Write-Manifest {
     param([string]$Path, $Data)
     $Data | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
+
 function New-StarOuterTempArchive {
     param([string]$Destination)
     if (Test-Blank $Destination) { throw 'Destination archive path is empty.' }
@@ -1972,6 +1993,7 @@ function Build-Manifest {
 # ============================================================================
 # 08. Extraction, verification and summary
 # ============================================================================
+
 function Read-OuterManifest {
     param([string]$OuterRoot)
 
@@ -2089,6 +2111,7 @@ function Format-FileDedupDiagnostics {
     param($Manifest)
     try { $aliases=@($Manifest.dedupAliases); if($aliases.Count -lt 1 -and $null -ne $Manifest.dedup){$aliases=@($Manifest.dedup.aliases)}; $summary=$Manifest.summary; $dedup=$Manifest.fileDedupDiagnostics; if($null -eq $dedup -and $null -ne $Manifest.diagnostics){$dedup=$Manifest.diagnostics.fileDedup}; $enabled=$true; if($null -ne $dedup -and $null -ne $dedup.enabled){$enabled=[bool]$dedup.enabled}; $lines=@('', 'File dedup summary:'); if(-not $enabled){$lines+='File dedup: OFF'; return ($lines -join "`r`n")}; $mode=[string]$Manifest.dedupAliasMode; if(Test-Blank $mode -and $null -ne $Manifest.dedup){$mode=[string]$Manifest.dedup.mode}; if(Test-Blank $mode -and $null -ne $dedup){$mode=[string]$dedup.mode}; if(Test-Blank $mode){$mode='unique-only-restored-on-extract'}; $aliasCount=if($null -ne $summary -and $null -ne $summary.dedupAliasCount){[int]$summary.dedupAliasCount}else{[int]$aliases.Count}; $aliasBytes=[int64]0; if($null -ne $summary -and $null -ne $summary.dedupAliasBytes){$aliasBytes=[int64]$summary.dedupAliasBytes}else{foreach($alias in $aliases){$aliasBytes+=[int64]$alias.bytes}}; $lines+='File dedup: ON - duplicate files are omitted from data blocks and restored from STAR manifest aliases.'; $lines+=('Dedup mode: {0}' -f $mode); $lines+=('STAR manifest aliases: {0}, alias bytes={1}' -f $aliasCount,(Format-Bytes $aliasBytes)); if($null -ne $summary -and $null -ne $summary.storedUniqueBytes){$lines+=('Stored unique source: {0}' -f (Format-Bytes ([int64]$summary.storedUniqueBytes)))} elseif($null -ne $Manifest.storedUniqueBytes){$lines+=('Stored unique source: {0}' -f (Format-Bytes ([int64]$Manifest.storedUniqueBytes)))}; if($null -ne $dedup -and [int]$dedup.errors -gt 0){$lines+=('Dedup errors: {0}' -f ([int]$dedup.errors))}; return ($lines -join "`r`n") } catch { return '' }
 }
+
 function Format-PlanDiagnostics {
     param($Manifest)
     try { $summary=$Manifest.summary; $plan=$Manifest.planDiagnostics; if($null -eq $plan -and $null -ne $Manifest.diagnostics){$plan=$Manifest.diagnostics.plan}; $build=$Manifest.build; $lines=@('', 'Build summary:'); $workMode=[string]$build.workrootMode; if(Test-Blank $workMode -and $null -ne $plan){$workMode=[string]$plan.buildWorkMode}; if(Test-Blank $workMode){$workMode=[string]$Manifest.buildWorkMode}; if(-not(Test-Blank $workMode)){$lines+=('Build workroot mode: {0}' -f $workMode)}; $pipeline=[string]$build.pipeline; if(Test-Blank $pipeline -and $null -ne $plan){$pipeline=[string]$plan.buildPipeline}; if(Test-Blank $pipeline){$pipeline=[string]$Manifest.buildPipeline}; if(-not(Test-Blank $pipeline)){$lines+=('Build pipeline: {0}' -f $pipeline)}; $cleanup=[string]$build.blockCleanup; if(Test-Blank $cleanup -and $null -ne $plan){$cleanup=[string]$plan.blockCleanup}; if(Test-Blank $cleanup){$cleanup=[string]$Manifest.blockCleanup}; if(-not(Test-Blank $cleanup)){$lines+=('Block cleanup: {0}' -f $cleanup)}; $manifestPos=[string]$build.manifestPosition; if(Test-Blank $manifestPos -and $null -ne $plan){$manifestPos=[string]$plan.manifestPosition}; if(Test-Blank $manifestPos){$manifestPos=[string]$Manifest.manifestPosition}; if(-not(Test-Blank $manifestPos)){$lines+=('Manifest position: {0}' -f $manifestPos)}; $catalogFiles=if($null -ne $summary -and $null -ne $summary.catalogFiles){[int]$summary.catalogFiles}elseif($null -ne $plan){[int]$plan.catalogFiles}else{0}; $uniqueFiles=if($null -ne $summary -and $null -ne $summary.uniqueFiles){[int]$summary.uniqueFiles}elseif($null -ne $plan){[int]$plan.uniqueFiles}else{0}; $aliasFiles=if($null -ne $summary -and $null -ne $summary.aliasFiles){[int]$summary.aliasFiles}elseif($null -ne $summary -and $null -ne $summary.dedupAliasCount){[int]$summary.dedupAliasCount}elseif($null -ne $plan){[int]$plan.aliasFiles}else{@($Manifest.dedupAliases).Count}; $aliasBytes=if($null -ne $summary -and $null -ne $summary.dedupAliasBytes){[int64]$summary.dedupAliasBytes}elseif($null -ne $plan){[int64]$plan.aliasBytes}else{[int64]0}; $storedUnique=if($null -ne $summary -and $null -ne $summary.storedUniqueBytes){[int64]$summary.storedUniqueBytes}elseif($null -ne $Manifest.storedUniqueBytes){[int64]$Manifest.storedUniqueBytes}else{[int64]0}; if($catalogFiles -gt 0){$lines+=('Catalog files: {0}' -f $catalogFiles)}; if($uniqueFiles -gt 0 -or $storedUnique -gt 0){$lines+=('Unique files stored: {0}, source={1}' -f $uniqueFiles,(Format-Bytes $storedUnique))}; if($aliasFiles -gt 0 -or $aliasBytes -gt 0){$lines+=('Alias files restored from manifest: {0}, alias bytes={1}' -f $aliasFiles,(Format-Bytes $aliasBytes))}; return ($lines -join "`r`n") } catch { return '' }
@@ -2247,6 +2270,7 @@ function Extract-Blocks {
 
     return @($script:lastSalvageSkippedBlocks)
 }
+
 function Get-SafePayloadPath {
     param([string]$PayloadRoot, [string]$RelativePath)
 
@@ -2442,6 +2466,7 @@ function Get-ArchiveSummary {
 # ============================================================================
 # 09. Core compression
 # ============================================================================
+
 function Compress-SmartArchive {
     param([string]$TarPath, [string]$Source, [string]$Destination, [string]$Mode)
     if (-not (Test-Path -LiteralPath $TarPath)) { throw 'tar.exe was not found.' }
@@ -2536,6 +2561,7 @@ if (-not (Test-Blank $WorkerConfigFile)) {
 # ============================================================================
 # 11. Path and GUI helpers
 # ============================================================================
+
 function Test-SmartArchivePath {
     param([string]$Path)
     if (Test-Blank $Path) { return $false }
@@ -2609,6 +2635,7 @@ function Test-SelectedInputReady {
 # ============================================================================
 # 12. Responsive worker launcher
 # ============================================================================
+
 function Quote-ProcessArg {
     param([string]$Value)
     if ($null -eq $Value) { return '""' }
@@ -2709,6 +2736,122 @@ Reset-SmartTarRuntimeState
     Clear-UiFocus
 }
 
+function Get-SmartTarChildProcesses {
+    param([int]$ParentProcessId)
+
+    if ($ParentProcessId -le 0) { return @() }
+
+    try {
+        return @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentProcessId" -ErrorAction Stop)
+    }
+    catch {
+        try {
+            return @(Get-WmiObject Win32_Process -Filter "ParentProcessId=$ParentProcessId" -ErrorAction SilentlyContinue)
+        }
+        catch {
+            return @()
+        }
+    }
+}
+
+function Stop-SmartTarProcessTree {
+    param(
+        [int]$ProcessId,
+        [bool]$IncludeRoot = $true
+    )
+
+    if ($ProcessId -le 0) { return }
+
+    foreach ($child in @(Get-SmartTarChildProcesses $ProcessId)) {
+        try {
+            Stop-SmartTarProcessTree -ProcessId ([int]$child.ProcessId) -IncludeRoot $true
+        }
+        catch {}
+    }
+
+    if ($IncludeRoot) {
+        try {
+            $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
+            if ($p) {
+                Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        }
+        catch {}
+    }
+}
+
+function Clear-CurrentWorkerState {
+    try { if ($script:currentProcess) { $script:currentProcess.Dispose() } } catch {}
+    $script:currentProcess = $null
+    $script:currentWorkerRoot = ''
+    $script:currentConfigFile = ''
+    $script:currentStatusFile = ''
+    $script:currentResultFile = ''
+    $script:currentInternalReportFile = ''
+    $script:currentFinalReportFile = ''
+}
+
+function Remove-CurrentOperationCompressionWorkRoot {
+    try {
+        if (Test-Blank $script:currentConfigFile) { return }
+        if (-not (Test-Path -LiteralPath $script:currentConfigFile)) { return }
+
+        $cfg = Get-Content -LiteralPath $script:currentConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$cfg.Action -ne 'Compress') { return }
+
+        $destination = [string]$cfg.Destination
+        if (Test-Blank $destination) { return }
+
+        $destDir = [System.IO.Path]::GetDirectoryName($destination)
+        if (Test-Blank $destDir) { $destDir = (Get-Location).Path }
+
+        $workBase = Join-Path $destDir '.SmartTAR_Work'
+        if (-not (Test-Path -LiteralPath $workBase)) { return }
+
+        foreach ($dir in @(Get-ChildItem -LiteralPath $workBase -Directory -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'smarttar_create_*' })) {
+            try { Remove-SmartTarTempFolder $dir.FullName } catch {}
+        }
+
+        try {
+            $remaining = @(Get-ChildItem -LiteralPath $workBase -Force -ErrorAction SilentlyContinue)
+            if ($remaining.Count -eq 0) {
+                Remove-Item -LiteralPath $workBase -Force -ErrorAction SilentlyContinue
+            }
+        }
+        catch {}
+    }
+    catch {}
+}
+
+function Stop-CurrentWorkerOperation {
+    param([string]$Reason = 'Cancelled by user.')
+
+    try { $timer.Stop() } catch {}
+    Set-BusyStatus 'Stopping operation...'
+
+    $workerPid = 0
+    try {
+        if ($script:currentProcess) { $workerPid = [int]$script:currentProcess.Id }
+    }
+    catch { $workerPid = 0 }
+
+    if ($workerPid -gt 0) {
+        try { Stop-SmartTarProcessTree -ProcessId $workerPid -IncludeRoot $true } catch {}
+        try { $script:currentProcess.WaitForExit(5000) | Out-Null } catch {}
+    }
+
+    try { Remove-CurrentOperationCompressionWorkRoot } catch {}
+
+    if (-not (Test-Blank $script:currentWorkerRoot)) {
+        try { Remove-SmartTarWorkAndRoot $script:currentWorkerRoot } catch {}
+    }
+
+    Clear-CurrentWorkerState
+    Set-UiBusy $false
+    Clear-UiFocus
+    Set-AppStatus 'Operation cancelled.' ([System.Drawing.Color]::DimGray)
+}
+
 function Read-WorkerResultFromTemp {
     for ($i = 1; $i -le 30; $i++) {
         if (Test-Path -LiteralPath $script:currentResultFile) {
@@ -2771,6 +2914,7 @@ function Resolve-WorkerCompletionFromTemp {
 # ============================================================================
 # 13. GUI construction
 # ============================================================================
+
 function New-EcoLabel {
     param(
         [string]$Text,
@@ -2922,6 +3066,7 @@ Set-OperationButtonsVisualState
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 500
+
 $timer.Add_Tick({
     try {
         if (-not (Test-Blank $script:currentStatusFile) -and (Test-Path -LiteralPath $script:currentStatusFile)) {
@@ -2935,16 +3080,7 @@ $timer.Add_Tick({
             $timer.Stop()
 
             try { $script:currentStdOut = $script:currentProcess.StandardOutput.ReadToEnd() } catch { $script:currentStdOut = '' }
-            try { $script:currentStdErr = $script:currentProcess.StandardError.ReadToEnd() } catch { $script:currentStdErr = ''
-    $script:ToolVersion = '1.2.2'
-    $script:FormatName = 'STAR'
-    $script:FormatVersion = 1
-    $script:ArchiveExtension = '.star'
-    $script:AdaptiveSampleBytes = 1MB
-    $script:analysisScope = Get-AnalysisScopeForMode $Mode
-    $script:compressionPreference = Get-CompressionPreferenceForMode $Mode
-    $script:adaptiveDeepAnalyze = Test-ContentAnalysisEnabled $script:analysisScope
-    $script:adaptiveStats = $null }
+            try { $script:currentStdErr = $script:currentProcess.StandardError.ReadToEnd() } catch { $script:currentStdErr = '' }
 
             $result = Read-WorkerResultFromTemp
             $completion = Resolve-WorkerCompletionFromTemp $result
@@ -2982,16 +3118,8 @@ $timer.Add_Tick({
                 Show-Message "$($script:currentAction) failed.`r`n`r`n$errorText" 'SmartTAR Error' ([System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             }
 
-            try { $script:currentProcess.Dispose() } catch {}
-            $script:currentProcess = $null
-
             Remove-SmartTarWorkAndRoot $script:currentWorkerRoot
-            $script:currentWorkerRoot = ''
-            $script:currentConfigFile = ''
-            $script:currentStatusFile = ''
-            $script:currentResultFile = ''
-            $script:currentInternalReportFile = ''
-            $script:currentFinalReportFile = ''
+            Clear-CurrentWorkerState
         }
     }
     catch {
@@ -3006,6 +3134,7 @@ $timer.Add_Tick({
 # ============================================================================
 # 14. GUI events and execution handlers
 # ============================================================================
+
 $btnFile.Add_Click({
     if ($script:isBusy) { return }
     $dialog = New-Object System.Windows.Forms.OpenFileDialog
@@ -3188,24 +3317,32 @@ function Execute-Verify {
 }
 
 $btnCompress.Add_Click({ Execute-Compress })
+
 $btnExtract.Add_Click({ Execute-Extract })
+
 $btnVerify.Add_Click({ Execute-Verify })
 
 $form.Add_FormClosing({
+    $disposeUiResources = $true
     try {
         if ($script:currentProcess -and -not $script:currentProcess.HasExited) {
             $confirm = Show-Message 'An operation is still running. Stop it and close?' 'Operation running' ([System.Windows.Forms.MessageBoxIcon]::Warning) ([System.Windows.Forms.MessageBoxButtons]::YesNo)
             if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
                 $_.Cancel = $true
+                $disposeUiResources = $false
                 return
             }
-            try { $script:currentProcess.Kill() } catch {}
+
+            Stop-CurrentWorkerOperation 'Cancelled by user during application close.'
         }
     }
     finally {
-        $fNormal.Dispose()
-        $fBold.Dispose()
-        $fItalic.Dispose()
+        if ($disposeUiResources -and -not $_.Cancel) {
+            try { $timer.Stop() } catch {}
+            try { $fNormal.Dispose() } catch {}
+            try { $fBold.Dispose() } catch {}
+            try { $fItalic.Dispose() } catch {}
+        }
     }
 })
 
