@@ -3,6 +3,18 @@
 
 # SmartTAR STAR v1.2.2
 
+**A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
+
+SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`. The output **is, and always will be, a standard TAR archive** – just encapsulated within an intelligent `.star` container that holds all the necessary data blocks and manifests.
+
+### Core Principles
+* **Built in Windows, for Windows:** It relies exclusively on tools and components that are already baked into the operating system (Windows 10/11).
+* **Zero External Dependencies:** No external libraries, no DLLs, and no third-party software installations required (100% portable).
+* **Maximum System Cleanliness:** The application leaves zero footprint. It creates nothing but its own temporary working files, which are completely cleaned up immediately after completion.
+* **Smart Deployment:** A lightweight, single-file solution ready to be deployed and used anywhere instantly.
+
+---
+
 ## Release Title
 
 **v1.2.2 - Full Sequential Build Pipeline, Compact Manifest, Hidden Work Folder, and Stable STAR Compatibility**
