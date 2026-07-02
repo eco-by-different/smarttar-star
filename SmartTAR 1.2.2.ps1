@@ -1021,7 +1021,7 @@ function Get-ModeGroupName {
 function Get-AnalysisScopeForMode {
     param([string]$Mode)
 
-    if ($Mode -eq 'Smart') { 'FullAnalyze' } else { 'UnknownOnly' }
+    if ($Mode -eq 'Smart' -or $Mode -eq 'Solid') { 'FullAnalyze' } else { 'UnknownOnly' }
 }
 
 function Get-CompressionPreferenceForMode {
@@ -1181,15 +1181,79 @@ function Get-SourceProfile {
 }
 
 function Select-AutoSolidMethod {
-    param([hashtable]$Capabilities, [hashtable]$Profile)
+    param([hashtable]$Capabilities, [hashtable]$Profile, $AdaptiveStats = $null)
 
-    $zstd = Select-ZstdOrBest $Capabilities
     $xz = Select-XzOrBest $Capabilities
+    $zstd = Select-ZstdOrBest $Capabilities
 
-    if ($Capabilities.ContainsKey('zstd19') -and $Capabilities['zstd19']) {
-        $binaryLike = [int64]$Profile.binary + [int64]$Profile.executable + [int64]$Profile.diskimage
-        if ($binaryLike -gt [int64]$Profile.text) { return $zstd }
+    $zstdAvailable = ($Capabilities.ContainsKey('zstd19') -and $Capabilities['zstd19'])
+    if (-not $zstdAvailable) { return $xz }
+
+    $textBytes = [int64]0
+    $binaryBytes = [int64]0
+    $diskImageBytes = [int64]0
+    $archiveLikeBytes = [int64]0
+    $unknownBytes = [int64]0
+    $totalBytes = [int64]0
+
+    if ($null -ne $Profile) {
+        foreach ($key in @('text','binary','executable','diskimage','media','archives','unknown')) {
+            if ($Profile.ContainsKey($key)) { $totalBytes += [int64]$Profile[$key] }
+        }
+        if ($Profile.ContainsKey('text')) { $textBytes = [int64]$Profile.text }
+        if ($Profile.ContainsKey('binary')) { $binaryBytes += [int64]$Profile.binary }
+        if ($Profile.ContainsKey('executable')) { $binaryBytes += [int64]$Profile.executable }
+        if ($Profile.ContainsKey('diskimage')) { $diskImageBytes = [int64]$Profile.diskimage; $binaryBytes += [int64]$Profile.diskimage }
+        if ($Profile.ContainsKey('media')) { $archiveLikeBytes += [int64]$Profile.media }
+        if ($Profile.ContainsKey('archives')) { $archiveLikeBytes += [int64]$Profile.archives }
+        if ($Profile.ContainsKey('unknown')) { $unknownBytes = [int64]$Profile.unknown }
     }
+
+    $entropyAverage = [double]0.0
+    $uniqueAverage = [double]0.0
+    $hasEntropySignal = $false
+
+    if ($null -ne $AdaptiveStats -and [bool]$AdaptiveStats.enabled -and [int64]$AdaptiveStats.unknownBytes -gt 0) {
+        $adaptiveTotal = [int64]$AdaptiveStats.unknownBytes
+        $adaptiveText = [int64]$AdaptiveStats.movedToTextBytes
+        $adaptiveBinary = [int64]$AdaptiveStats.movedToBinaryBytes
+        $adaptiveArchive = [int64]$AdaptiveStats.movedToArchivesBytes
+        $adaptiveUnknown = [int64]$AdaptiveStats.stayedUnknownBytes
+
+        if ($adaptiveTotal -gt 0) {
+            $totalBytes = $adaptiveTotal
+            $textBytes = $adaptiveText
+            $binaryBytes = $adaptiveBinary
+            $archiveLikeBytes = $adaptiveArchive
+            $unknownBytes = $adaptiveUnknown
+
+            if ($null -ne $Profile -and $Profile.ContainsKey('diskimage')) {
+                $diskImageBytes = [int64]$Profile.diskimage
+                if ($diskImageBytes -gt $binaryBytes) { $binaryBytes = $diskImageBytes }
+            }
+        }
+
+        if ([int]$AdaptiveStats.entropyCount -gt 0) {
+            $entropyAverage = [double]$AdaptiveStats.entropySum / [double]$AdaptiveStats.entropyCount
+            $hasEntropySignal = $true
+        }
+        if ([int]$AdaptiveStats.uniqueCount -gt 0) {
+            $uniqueAverage = [double]$AdaptiveStats.uniqueSum / [double]$AdaptiveStats.uniqueCount
+        }
+    }
+
+    if ($totalBytes -le 0) { return $xz }
+
+    $compressibleBytes = $textBytes + $unknownBytes
+    $archiveRatio = [double]$archiveLikeBytes / [double]$totalBytes
+    $diskRatio = [double]$diskImageBytes / [double]$totalBytes
+    $binaryRatio = [double]$binaryBytes / [double]$totalBytes
+    $compressibleRatio = [double]$compressibleBytes / [double]$totalBytes
+
+    if ($archiveRatio -ge 0.60) { return $zstd }
+    if ($diskRatio -ge 0.50 -and $compressibleRatio -lt 0.25 -and $totalBytes -ge 256MB) { return $zstd }
+    if ($binaryRatio -ge 0.90 -and $compressibleRatio -lt 0.10 -and $totalBytes -ge 512MB) { return $zstd }
+    if ($hasEntropySignal -and $entropyAverage -ge 7.65 -and $uniqueAverage -ge 220 -and $binaryRatio -ge 0.60 -and $compressibleRatio -lt 0.20 -and $totalBytes -ge 128MB) { return $zstd }
 
     return $xz
 }
@@ -2481,7 +2545,7 @@ function Compress-SmartArchive {
     $blocksDir = Join-Path $work 'blocks'; $structureStage = Join-Path $work 'structure_stage'
     [System.IO.Directory]::CreateDirectory($blocksDir) | Out-Null; [System.IO.Directory]::CreateDirectory($structureStage) | Out-Null
     $outerTemp = ''; $published = $false
-    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceParent = Split-Path -Parent $Source; $sourceLeaf = Split-Path -Leaf $Source; if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }; if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating sequential STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksSequential $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
+    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceParent = Split-Path -Parent $Source; $sourceLeaf = Split-Path -Leaf $Source; if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }; if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; if ($Mode -eq 'Solid' -and $groups.Contains('solid')) { $groups.solid.Method = Select-AutoSolidMethod $capabilities $profile $script:adaptiveStats; $groups.solid.Reason = 'Solid single-block method selected from content profile.' }; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating sequential STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksSequential $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
     finally { if (-not $published -and -not (Test-Blank $outerTemp) -and (Test-Path -LiteralPath $outerTemp)) { Remove-Item -LiteralPath $outerTemp -Force -ErrorAction SilentlyContinue }; Remove-SmartTarWorkAndRoot $work }
 }
 
