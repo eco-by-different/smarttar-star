@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # SmartTAR - STAR v1.2.2
 # Windows PowerShell GUI archiver using Windows tar.exe / bsdtar
 # ============================================================================
@@ -369,6 +369,23 @@ function Trim-PathSeparators {
     param([string]$Text)
     if (Test-Blank $Text) { return '' }
     return $Text.TrimEnd([char]92, [char]47)
+}
+
+function Convert-ToSafeArchiveFileNamePart {
+    param([string]$Name)
+
+    if (Test-Blank $Name) { return '' }
+
+    $safe = [string]$Name
+    foreach ($ch in [System.IO.Path]::GetInvalidFileNameChars()) {
+        $safe = $safe.Replace([string]$ch, '_')
+    }
+
+    $safe = $safe.Trim()
+    $safe = $safe.TrimEnd([char[]]@([char]46, [char]32))
+
+    if (Test-Blank $safe) { return '' }
+    return $safe
 }
 
 function Normalize-ArchiveSourcePath {
@@ -2641,23 +2658,6 @@ function Ensure-StarExtension {
     return ($Path + $script:ArchiveExtension)
 }
 
-function Convert-ToSafeArchiveFileNamePart {
-    param([string]$Name)
-
-    if (Test-Blank $Name) { return '' }
-
-    $safe = [string]$Name
-    foreach ($ch in [System.IO.Path]::GetInvalidFileNameChars()) {
-        $safe = $safe.Replace([string]$ch, '_')
-    }
-
-    $safe = $safe.Trim()
-    $safe = $safe.TrimEnd([char[]]@([char]46, [char]32))
-
-    if (Test-Blank $safe) { return '' }
-    return $safe
-}
-
 function Get-DefaultArchiveBaseName {
     param([string]$Path, [string]$Type)
 
@@ -2671,11 +2671,24 @@ function Get-DefaultArchiveBaseName {
         $root = [System.IO.Path]::GetPathRoot($full)
 
         if (-not (Test-Blank $root) -and ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root))) {
-            $driveName = (Trim-PathSeparators $root)
-            $driveName = $driveName.Replace(':', '')
-            $driveName = Convert-ToSafeArchiveFileNamePart $driveName
-            if (Test-Blank $driveName) { $driveName = 'root' }
-            return ($driveName + '_drive')
+            $driveLetter = (Trim-PathSeparators $root)
+            $driveLetter = $driveLetter.Replace(':', '')
+            $driveLetter = Convert-ToSafeArchiveFileNamePart $driveLetter
+
+            $volumeLabel = ''
+            try {
+                $driveInfo = [System.IO.DriveInfo]::new($root)
+                if ($null -ne $driveInfo -and $driveInfo.IsReady) {
+                    $volumeLabel = Convert-ToSafeArchiveFileNamePart ([string]$driveInfo.VolumeLabel)
+                }
+            }
+            catch {
+                $volumeLabel = ''
+            }
+
+            if (-not (Test-Blank $volumeLabel)) { return $volumeLabel }
+            if (Test-Blank $driveLetter) { $driveLetter = 'root' }
+            return ('Drive_' + $driveLetter)
         }
     }
     catch {
