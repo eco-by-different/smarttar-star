@@ -1315,7 +1315,9 @@ function Get-SafeStageRelativePath {
     $candidate=[string]$RelativePath
     if(Test-Blank $candidate){$candidate=[string]$FallbackName}
     $candidate=(Convert-ToLocalPath $candidate).TrimStart([char]92,[char]47)
-    if((Test-Blank $candidate) -or [System.IO.Path]::IsPathRooted($candidate) -or ($candidate -match '^[A-Za-z]:') -or ($candidate -match '(^|[\\/])\.\.([\\/]|$)') -or ($candidate -match ':')){$candidate=[string]$FallbackName}
+    if((Test-Blank $candidate) -or [System.IO.Path]::IsPathRooted($candidate) -or ($candidate -match '^[A-Za-z]:') -or ($candidate -match '(^|[\\/])\.\.([\\/]|$)') -or ($candidate -match ':')){
+        $candidate = Convert-ToSafeArchiveFileNamePart ([string]$FallbackName)
+    }
     if(Test-Blank $candidate){$candidate='root'}
     return $candidate
 }
@@ -2639,13 +2641,53 @@ function Ensure-StarExtension {
     return ($Path + $script:ArchiveExtension)
 }
 
+function Convert-ToSafeArchiveFileNamePart {
+    param([string]$Name)
+
+    if (Test-Blank $Name) { return '' }
+
+    $safe = [string]$Name
+    foreach ($ch in [System.IO.Path]::GetInvalidFileNameChars()) {
+        $safe = $safe.Replace([string]$ch, '_')
+    }
+
+    $safe = $safe.Trim()
+    $safe = $safe.TrimEnd([char[]]@([char]46, [char]32))
+
+    if (Test-Blank $safe) { return '' }
+    return $safe
+}
+
 function Get-DefaultArchiveBaseName {
     param([string]$Path, [string]$Type)
 
-    $leaf = Split-Path -Leaf (Normalize-ArchiveSourcePath $Path)
+    if (Test-Blank $Path) { return "archive_$(Get-Date -Format yyyyMMdd_HHmmss)" }
+
+    $normalized = Normalize-ArchiveSourcePath $Path
+    if (Test-Blank $normalized) { return "archive_$(Get-Date -Format yyyyMMdd_HHmmss)" }
+
+    try {
+        $full = [System.IO.Path]::GetFullPath($normalized)
+        $root = [System.IO.Path]::GetPathRoot($full)
+
+        if (-not (Test-Blank $root) -and ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root))) {
+            $driveName = (Trim-PathSeparators $root)
+            $driveName = $driveName.Replace(':', '')
+            $driveName = Convert-ToSafeArchiveFileNamePart $driveName
+            if (Test-Blank $driveName) { $driveName = 'root' }
+            return ($driveName + '_drive')
+        }
+    }
+    catch {
+        # Fall through to normal leaf handling.
+    }
+
+    $leaf = Split-Path -Leaf $normalized
+    if ($Type -ne 'Folder') { $leaf = [System.IO.Path]::GetFileNameWithoutExtension($leaf) }
+
+    $leaf = Convert-ToSafeArchiveFileNamePart $leaf
     if (Test-Blank $leaf) { return "archive_$(Get-Date -Format yyyyMMdd_HHmmss)" }
-    if ($Type -eq 'Folder') { return $leaf }
-    return [System.IO.Path]::GetFileNameWithoutExtension($leaf)
+    return $leaf
 }
 
 function Get-SelectedCompressionMode {
