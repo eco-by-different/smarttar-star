@@ -3140,7 +3140,7 @@ function Show-Message {
 }
 
 $form = New-UiObject 'System.Windows.Forms.Form' @{
-    Text            = 'SmartTAR - STAR v1.2.2 .:: Copyright (c) 2026 eco-by-different ::.'
+    Text            = 'SmartTAR - STAR 1.2.2  .:: Copyright © 2026 eco-by-different ::.'
     ClientSize      = (New-Size 505 490)
     StartPosition   = 'CenterScreen'
     BackColor       = $cBg
