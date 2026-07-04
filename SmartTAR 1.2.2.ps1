@@ -2015,16 +2015,44 @@ function Add-StarOuterEntry {
     if (Test-Blank $WorkRoot -or -not (Test-Path -LiteralPath $WorkRoot)) { throw 'Work root does not exist.' }
     $entry = Convert-ToTarPath $RelativeEntry
     if (Test-Blank $entry -or -not (Test-RelativePathSafe $entry)) { throw "Unsafe STAR outer entry path: $entry" }
-    if (Test-Path -LiteralPath $ArchivePath) { Invoke-Tar $TarPath @('-rf', $ArchivePath, '-C', $WorkRoot, $entry) $FailMessage }
-    else { Invoke-Tar $TarPath @('-cf', $ArchivePath, '-C', $WorkRoot, $entry) $FailMessage }
+    if (Test-Path -LiteralPath $ArchivePath) { Invoke-Tar $TarPath @('--format=pax', '-rf', $ArchivePath, '-C', $WorkRoot, $entry) $FailMessage }
+    else { Invoke-Tar $TarPath @('--format=pax', '-cf', $ArchivePath, '-C', $WorkRoot, $entry) $FailMessage }
+}
+
+function Test-StarOuterEntryExists {
+    param([string]$TarPath, [string]$ArchivePath, [string]$RelativeEntry)
+
+    if (Test-Blank $ArchivePath -or -not (Test-Path -LiteralPath $ArchivePath)) { return $false }
+    if (Test-Blank $RelativeEntry) { return $false }
+
+    $wanted = (Convert-ToTarPath $RelativeEntry).TrimStart('./')
+    $result = Invoke-TarRaw $TarPath @('-tf', $ArchivePath)
+    if ([int]$result.ExitCode -ne 0) {
+        $text = [string]$result.Output
+        if (Test-Blank $text) { $text = 'No tar.exe output captured.' }
+        throw "Cannot verify outer STAR entries. tar.exe exit code: $($result.ExitCode)`r`n$text"
+    }
+
+    foreach ($entry in @(([string]$result.Output) -split "`r?`n")) {
+        if (Test-Blank $entry) { continue }
+        $normalized = (Convert-ToTarPath $entry).TrimStart('./')
+        if ($normalized -eq $wanted) { return $true }
+    }
+
+    return $false
 }
 
 function Add-BlockToStarOuterAndCleanup {
     param([string]$TarPath,[string]$OuterArchivePath,[string]$WorkRoot,[ref]$Blocks,[string]$BlockId,[string]$GroupName,[string]$BlockPath,[hashtable]$Method,[string]$Reason,[int]$FileCount,[int]$DirCount,[int64]$SourceBytes)
-    Add-BlockManifestItem $Blocks $BlockId $GroupName $BlockPath $Method $Reason $FileCount $DirCount $SourceBytes
+    if (Test-Blank $BlockPath -or -not (Test-Path -LiteralPath $BlockPath)) { throw "Block file does not exist before publish: $BlockPath" }
     $relativeBlock = 'blocks/' + [System.IO.Path]::GetFileName($BlockPath)
     Set-BusyStatus "Publishing block $BlockId $GroupName into STAR..."
     Add-StarOuterEntry $TarPath $OuterArchivePath $WorkRoot $relativeBlock 'Outer .star block append failed.'
+    Set-BusyStatus "Confirming published block $BlockId $GroupName..."
+    if (-not (Test-StarOuterEntryExists $TarPath $OuterArchivePath $relativeBlock)) {
+        throw "Published block was not found in outer STAR archive: $relativeBlock"
+    }
+    Add-BlockManifestItem $Blocks $BlockId $GroupName $BlockPath $Method $Reason $FileCount $DirCount $SourceBytes
     Remove-Item -LiteralPath $BlockPath -Force -ErrorAction SilentlyContinue
 }
 
@@ -2068,7 +2096,7 @@ function Build-Manifest {
     $aliasBytes = [int64]0
     foreach ($alias in @($script:planDedupAliases)) { $aliasBytes += [int64]$alias.bytes }
     $summary = [ordered]@{ storedUniqueBytes = $storedUniqueBytes; catalogFiles = if ($null -ne $script:planDiagnostics) { [int]$script:planDiagnostics.catalogFiles } else { 0 }; uniqueFiles = if ($null -ne $script:planDiagnostics) { [int]$script:planDiagnostics.uniqueFiles } else { 0 }; aliasFiles = @($script:planDedupAliases).Count; dedupAliasCount = @($script:planDedupAliases).Count; dedupAliasBytes = $aliasBytes }
-    $manifest = [ordered]@{ format = $script:FormatName; formatVersion = $script:FormatVersion; tool = 'SmartTAR'; toolVersion = $script:ToolVersion; createdUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); sourceName = $SourceLeaf; sourceType = if ($SourceItem.PSIsContainer) { 'Folder' } else { 'File' }; sourceBytes = Get-SourceSize $Source; compressionMode = $Mode; compressionProfile = $profileName; build = [ordered]@{ workrootMode = [string]$script:buildWorkMode; pipeline = 'full-sequential-block-publish'; blockCleanup = 'after-append'; manifestPosition = 'last-outer-entry' }; summary = $summary; dedupAliasMode = 'unique-only-restored-on-extract'; dedupAliases = @($script:planDedupAliases); blocks = @($Blocks) }
+    $manifest = [ordered]@{ format = $script:FormatName; formatVersion = $script:FormatVersion; tool = 'SmartTAR'; toolVersion = $script:ToolVersion; createdUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); sourceName = $SourceLeaf; sourceType = if ($SourceItem.PSIsContainer) { 'Folder' } else { 'File' }; sourceBytes = Get-SourceSize $Source; compressionMode = $Mode; compressionProfile = $profileName; build = [ordered]@{ workrootMode = [string]$script:buildWorkMode; pipeline = 'full-sequential-block-publish'; blockCleanup = 'after-append'; manifestPosition = 'last-outer-entry'; outerTarFormat = 'pax' }; summary = $summary; dedupAliasMode = 'unique-only-restored-on-extract'; dedupAliases = @($script:planDedupAliases); blocks = @($Blocks) }
     if ([bool]$script:IncludeDebugDiagnosticsInManifest) { $manifest.diagnostics = [ordered]@{ source = $Profile; adaptive = $script:adaptiveStats; fileDedup = $script:dedupStats; plan = $script:planDiagnostics } }
     return $manifest
 }
