@@ -1950,6 +1950,122 @@ function Create-BlockFromStageList {
     Invoke-Tar $TarPath $args "Block creation failed: $BlockPath."
 }
 
+function Get-SmartTarMethodProbeSampleFiles {
+    param($Files, [int64]$MaxBytes = 256MB, [int]$MaxFiles = 128, [int64]$MaxSingleFileBytes = 64MB)
+
+    $sample = New-Object System.Collections.ArrayList
+    $sampleBytes = [int64]0
+    $eligible = @($Files | Where-Object { $null -ne $_ -and [int64]$_.Bytes -gt 0 } | Sort-Object @{ Expression = { [int64]$_.Bytes } }, @{ Expression = { [string]$_.Rel } })
+
+    foreach ($file in $eligible) {
+        if ($sample.Count -ge $MaxFiles) { break }
+        $bytes = [int64]$file.Bytes
+        if ($bytes -gt $MaxSingleFileBytes) { continue }
+        if ($sample.Count -gt 0 -and (($sampleBytes + $bytes) -gt $MaxBytes)) { break }
+        [void]$sample.Add($file)
+        $sampleBytes += $bytes
+    }
+
+    if ($sample.Count -lt 1 -and $eligible.Count -gt 0) {
+        [void]$sample.Add($eligible[0])
+        $sampleBytes = [int64]$eligible[0].Bytes
+    }
+
+    return [pscustomobject]@{
+        Files = [object[]]$sample.ToArray()
+        Bytes = [int64]$sampleBytes
+        Count = [int]$sample.Count
+    }
+}
+
+function Invoke-SmartTarArchiveGroupMethodProbe {
+    param([string]$TarPath, [string]$WorkRoot, [hashtable]$Group, [hashtable]$Capabilities)
+
+    if ($null -eq $Group) { return }
+    if ([int]$Group.FileCount -lt 1 -or [int64]$Group.Bytes -lt 128MB) { return }
+
+    $methods = New-Object System.Collections.ArrayList
+    if ($Capabilities.ContainsKey('store') -and [bool]$Capabilities['store']) { [void]$methods.Add((Get-TarMethodByName 'store')) }
+    if ($Capabilities.ContainsKey('zstd19') -and [bool]$Capabilities['zstd19']) { [void]$methods.Add((Get-TarMethodByName 'zstd19')) }
+    if ($Capabilities.ContainsKey('xz9') -and [bool]$Capabilities['xz9']) { [void]$methods.Add((Get-TarMethodByName 'xz9')) }
+    if ($methods.Count -lt 2) { return }
+
+    $sample = Get-SmartTarMethodProbeSampleFiles @($Group.Files)
+    if ($null -eq $sample -or [int]$sample.Count -lt 1) { return }
+
+    $probeRoot = Join-Path $WorkRoot ('methodprobe_' + [guid]::NewGuid().ToString('N'))
+    [System.IO.Directory]::CreateDirectory($probeRoot) | Out-Null
+    $stageRoot = $null
+
+    try {
+        Set-BusyStatus ("Probing archive-like group methods ({0} files, {1})..." -f [int]$sample.Count, (Format-Bytes ([int64]$sample.Bytes)))
+        $stageRoot = New-ChunkHardlinkStage $WorkRoot @($sample.Files)
+        $relativePaths = @($sample.Files | ForEach-Object { [string]$_.Rel })
+        $results = New-Object System.Collections.ArrayList
+
+        foreach ($method in @($methods)) {
+            if ($null -eq $method) { continue }
+            $methodName = [string]$method.Name
+            $probePath = Join-Path $probeRoot ('probe_' + $methodName + $method.Extension)
+            try {
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                Create-BlockFromStageList $TarPath $stageRoot $probePath $method $relativePaths
+                $sw.Stop()
+                if (Test-Path -LiteralPath $probePath) {
+                    $probeSize = [int64](Get-Item -LiteralPath $probePath).Length
+                    [void]$results.Add([pscustomobject]@{ Method=$method; Name=$methodName; Display=[string]$method.Display; Size=$probeSize; Milliseconds=[int64]$sw.ElapsedMilliseconds })
+                }
+            }
+            catch {
+                Add-GroupDiagnostic ([string]$Group.Name) 'method-probe-failed' ("{0} probe failed: {1}" -f [string]$method.Display, [string]$_.Exception.Message) ([int]$sample.Count) ([int64]$sample.Bytes)
+            }
+            finally {
+                Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        $resultList = @($results)
+        if ($resultList.Count -lt 2) { return }
+        $storeResult = @($resultList | Where-Object { [string]$_.Name -eq 'store' } | Select-Object -First 1)
+        if ($null -eq $storeResult) { return }
+
+        $best = @($resultList | Sort-Object @{ Expression = { [int64]$_.Size } }, @{ Expression = { [int64]$_.Milliseconds } } | Select-Object -First 1)
+        if ($null -eq $best) { return }
+
+        $storeSize = [int64]$storeResult.Size
+        if ($storeSize -le 0) { return }
+        $improvement = ([double]($storeSize - [int64]$best.Size) / [double]$storeSize)
+
+        $parts = @()
+        foreach ($r in @($resultList | Sort-Object Name)) {
+            $ratio = if ([int64]$sample.Bytes -gt 0) { ('{0:N2} %' -f (([double]$r.Size / [double]$sample.Bytes) * 100.0)) } else { 'n/a' }
+            $parts += ('{0}={1} ({2}, {3} ms)' -f [string]$r.Display, (Format-Bytes ([int64]$r.Size)), $ratio, [int64]$r.Milliseconds)
+        }
+
+        if ([string]$best.Name -ne 'store' -and $improvement -ge 0.02) {
+            $Group.Method = $best.Method
+            $Group.Reason = ("Archive-like data method probe selected {0}. Sample: {1}. STORE improvement: {2:N2} %." -f [string]$best.Display, ($parts -join '; '), ($improvement * 100.0))
+            Add-GroupDiagnostic ([string]$Group.Name) 'method-probe-selected' $Group.Reason ([int]$sample.Count) ([int64]$sample.Bytes)
+        }
+        else {
+            $Group.Reason = ("Archive-like data kept STORE after method probe. Sample: {0}. Best improvement was {1:N2} %." -f ($parts -join '; '), ([Math]::Max(0.0, $improvement) * 100.0))
+            Add-GroupDiagnostic ([string]$Group.Name) 'method-probe-store' $Group.Reason ([int]$sample.Count) ([int64]$sample.Bytes)
+        }
+    }
+    finally {
+        Remove-SmartTarTempFolder $stageRoot
+        Remove-SmartTarTempFolder $probeRoot
+    }
+}
+
+function Invoke-SmartArchiveMethodProbes {
+    param([string]$TarPath, [string]$WorkRoot, [string]$Mode, [hashtable]$Groups, [hashtable]$Capabilities)
+
+    if ([string]$Mode -ne 'Smart') { return }
+    if ($null -eq $Groups -or -not $Groups.Contains('archives')) { return }
+    Invoke-SmartTarArchiveGroupMethodProbe $TarPath $WorkRoot $Groups['archives'] $Capabilities
+}
+
 function Add-BlockManifestItem {
     param(
         [ref]$List,
@@ -2592,7 +2708,7 @@ function Compress-SmartArchive {
     $blocksDir = Join-Path $work 'blocks'; $structureStage = Join-Path $work 'structure_stage'
     [System.IO.Directory]::CreateDirectory($blocksDir) | Out-Null; [System.IO.Directory]::CreateDirectory($structureStage) | Out-Null
     $outerTemp = ''; $published = $false
-    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceParent = Split-Path -Parent $Source; $sourceLeaf = Split-Path -Leaf $Source; if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }; if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; if ($Mode -eq 'Solid' -and $groups.Contains('solid')) { $groups.solid.Method = Select-AutoSolidMethod $capabilities $profile $script:adaptiveStats; $groups.solid.Reason = 'Solid single-block method selected from content profile.' }; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating sequential STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksSequential $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
+    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceParent = Split-Path -Parent $Source; $sourceLeaf = Split-Path -Leaf $Source; if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }; if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; Invoke-SmartArchiveMethodProbes $TarPath $work $Mode $groups $capabilities; if ($Mode -eq 'Solid' -and $groups.Contains('solid')) { $groups.solid.Method = Select-AutoSolidMethod $capabilities $profile $script:adaptiveStats; $groups.solid.Reason = 'Solid single-block method selected from content profile.' }; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating sequential STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksSequential $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
     finally { if (-not $published -and -not (Test-Blank $outerTemp) -and (Test-Path -LiteralPath $outerTemp)) { Remove-Item -LiteralPath $outerTemp -Force -ErrorAction SilentlyContinue }; Remove-SmartTarWorkAndRoot $work }
 }
 
