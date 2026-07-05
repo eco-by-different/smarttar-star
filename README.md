@@ -26,6 +26,22 @@ SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`
 
 ---
 
+# Antivirus Notice (False Positives)
+
+The `.exe` binary is generated using PS2EXE, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
+
+The underlying PowerShell script is clean.  
+If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` script instead.
+
+---
+
+## Screenshot
+
+
+![SmartTAR screenshot](docs/images/smarttar-gui.png)
+
+---
+
 # SmartTAR STAR v1.2.2
 
 ## Release Title
@@ -53,22 +69,6 @@ The archive format version remains compatible with the existing STAR v1.x layout
 ```text
 formatVersion = 1
 ```
-
----
-
-# Antivirus Notice (False Positives)
-
-The `.exe` binary is generated using PS2EXE, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
-
-The underlying PowerShell script is clean.  
-If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` script instead.
-
----
-
-## Screenshot
-
-
-![SmartTAR screenshot](docs/images/smarttar-gui.png)
 
 ---
 
