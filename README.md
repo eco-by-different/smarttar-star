@@ -1,7 +1,7 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/winzstd)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/winzstd)
 
-## SmartTAR STAR 1.3.0
+# SmartTAR STAR 1.3.0
 
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
 
@@ -42,7 +42,7 @@ If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` scri
 
 ---
 
-# SmartTAR STAR v1.2.2
+#& SmartTAR STAR 1.2.2
 
 ## Release Title
 
