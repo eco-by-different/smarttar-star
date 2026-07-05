@@ -13,7 +13,7 @@ SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`
 * **Maximum System Cleanliness:** The application leaves zero footprint. It creates nothing but its own temporary working files, which are completely cleaned up immediately after completion.
 * **Smart Deployment:** A lightweight, single-file solution ready to be deployed and used anywhere instantly.
 
-## Release Title
+## Release Notes
 
 - Added PAX TAR outer container for large block support.
 - Added publish-confirm check before manifest commit.
