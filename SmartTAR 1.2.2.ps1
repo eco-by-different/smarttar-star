@@ -2110,7 +2110,7 @@ function Add-GroupDiagnostic {
 
 function Write-Manifest {
     param([string]$Path, $Data)
-    $Data | ConvertTo-Json -Depth 40 | Set-Content -LiteralPath $Path -Encoding UTF8
+    $Data | ConvertTo-Json -Depth 40 -Compress | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
 function New-StarOuterTempArchive {
