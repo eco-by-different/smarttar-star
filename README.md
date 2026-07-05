@@ -1,7 +1,7 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/winzstd)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/winzstd)
 
-# SmartTAR STAR v1.2.2
+## SmartTAR STAR 1.3.0
 
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
 
@@ -13,7 +13,20 @@ SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`
 * **Maximum System Cleanliness:** The application leaves zero footprint. It creates nothing but its own temporary working files, which are completely cleaned up immediately after completion.
 * **Smart Deployment:** A lightweight, single-file solution ready to be deployed and used anywhere instantly.
 
+## Release Title
+
+- Added PAX TAR outer container for large block support.
+- Added publish-confirm check before manifest commit.
+- Minified `manifest.json` with `ConvertTo-Json -Depth 40 -Compress`.
+- Added Smart mode second-pass probe for `archives`: STORE vs ZSTD19 vs XZ9.
+- Added Browse mode for STAR archives.
+- Added selective extraction from Browse tree.
+- Fixed Browse extraction to respect “Open output folder after success”.
+- Updated GUI/version to SmartTAR STAR 1.3.0.
+
 ---
+
+# SmartTAR STAR v1.2.2
 
 ## Release Title
 
