@@ -42,7 +42,7 @@ If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` scri
 
 ---
 
-#& SmartTAR STAR 1.2.2
+# SmartTAR STAR 1.2.2
 
 ## Release Title
 
