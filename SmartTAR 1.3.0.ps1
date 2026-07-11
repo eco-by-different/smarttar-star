@@ -2558,7 +2558,7 @@ function Restore-DedupAliases {
 }
 
 function Test-DedupAliasesForManifest {
-    param($Manifest, [hashtable]$StoredEntries = $null)
+    param($Manifest, [string]$PayloadRoot = '')
 
     $aliases = @($Manifest.dedupAliases)
     $result = [ordered]@{
@@ -2578,9 +2578,9 @@ function Test-DedupAliasesForManifest {
             if (Test-Blank $aliasPath -or -not (Test-RelativePathSafe $aliasPath)) { throw "Unsafe dedup alias path: $aliasPath" }
             if (Test-Blank $targetPath -or -not (Test-RelativePathSafe $targetPath)) { throw "Unsafe dedup alias target: $targetPath" }
 
-            if ($null -ne $StoredEntries) {
-                $targetKey = $targetPath.TrimStart('./').ToLowerInvariant()
-                if (-not $StoredEntries.ContainsKey($targetKey)) { throw "Dedup alias target not stored in blocks: $targetPath" }
+            if (-not (Test-Blank $PayloadRoot)) {
+                $targetFile = Get-SafePayloadPath $PayloadRoot $targetPath
+                if (-not (Test-Path -LiteralPath $targetFile -PathType Leaf)) { throw "Dedup alias target not stored in blocks: $targetPath" }
             }
 
             $result.ok = [int]$result.ok + 1
@@ -2638,9 +2638,9 @@ function Verify-SmartArchive {
     param([string]$TarPath,[string]$ArchivePath)
     if(-not (Test-Path -LiteralPath $ArchivePath)){throw 'Archive path does not exist.'}
     $r=@('')*32; $r[0]='Verify'; $r[1]='Archive verification completed.'; $r[20]=[string]$ArchivePath
-    $work=New-SafeWorkRoot 'verify' $ArchivePath; $outer=Join-Path $work 'outer'; [System.IO.Directory]::CreateDirectory($outer)|Out-Null
+    $work=New-SafeWorkRoot 'verify' $ArchivePath; $outer=Join-Path $work 'outer'; $payload=Join-Path $work 'payload'; [System.IO.Directory]::CreateDirectory($outer)|Out-Null; [System.IO.Directory]::CreateDirectory($payload)|Out-Null
     try{
-        $safeArchive=Prepare-SafeArchiveInput $ArchivePath $work; Invoke-Tar $TarPath @('-xf',$safeArchive,'-C',$outer) 'Outer verification failed.'; $manifest=Read-OuterManifest $outer; $blocks=@($manifest.blocks); $ok=0; $fail=0; $lines=@(); $storedEntries=@{}
+        $safeArchive=Prepare-SafeArchiveInput $ArchivePath $work; Invoke-Tar $TarPath @('-xf',$safeArchive,'-C',$outer) 'Outer verification failed.'; $manifest=Read-OuterManifest $outer; $blocks=@($manifest.blocks); $ok=0; $fail=0; $lines=@()
         foreach($block in $blocks){
             Set-BusyStatus "Verifying block $($block.id) $($block.group)..."
             $blockPath=Resolve-SafeBlockPath $outer ([string]$block.path)
@@ -2652,13 +2652,21 @@ function Verify-SmartArchive {
                     if(Test-Blank $entry){continue}
                     if(-not (Test-RelativePathSafe $entry)){ $listed=$false; $lines+="UNSAFE ENTRY: $($block.path) -> $entry"; break }
                     $norm=(Convert-ToTarPath $entry).TrimStart('./')
-                    if(-not (Test-Blank $norm)){ $storedEntries[$norm.ToLowerInvariant()]=$true }
                 }
             }
             $hashOk=$true; if($block.sha256){$hashOk=((Get-FileSHA256 $blockPath) -eq ([string]$block.sha256).ToLowerInvariant())}
-            if($listed -and $hashOk){$ok++}else{$fail++; $lines+="FAIL: $($block.id) $($block.group) $($block.path)"}
+            if($listed -and $hashOk){
+                try {
+                    Invoke-Tar $TarPath @('-xf', $blockPath, '-C', $payload) "Block verification extraction failed: $($block.path)."
+                    $ok++
+                }
+                catch {
+                    $fail++
+                    $lines+="FAIL: $($block.id) $($block.group) $($block.path)"
+                }
+            }else{$fail++; $lines+="FAIL: $($block.id) $($block.group) $($block.path)"}
         }
-        $aliasCheck = Test-DedupAliasesForManifest $manifest $storedEntries
+        $aliasCheck = Test-DedupAliasesForManifest $manifest $payload
         if([int]$aliasCheck.failed -gt 0){
             $fail += [int]$aliasCheck.failed
             foreach($detail in @($aliasCheck.details)){ $lines += "DEDUP ALIAS FAIL: $detail" }
