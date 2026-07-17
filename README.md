@@ -1,7 +1,7 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/winzstd)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/winzstd)
 
-# SmartTAR STAR 1.3.0
+# SmartTAR - STAR 1.3.0
 
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
 
@@ -42,7 +42,7 @@ If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` scri
 
 ---
 
-## SmartTAR STAR 1.2.2
+## SmartTAR - STAR 1.2.2
 
 ## Release Title
 
@@ -52,7 +52,7 @@ If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` scri
 
 ## Release Notes
 
-SmartTAR STAR v1.2.2 is a stability, storage-efficiency, and cleanup release for the STAR v1.2 line.
+SmartTAR - STAR v1.2.2 is a stability, storage-efficiency, and cleanup release for the STAR v1.2 line.
 
 This release introduces a new full sequential block publishing pipeline.  
 Instead of creating all archive blocks first and only then wrapping them into the final `.star` container, SmartTAR now creates each block, appends it into the outer STAR archive, and immediately removes the standalone block file.
@@ -100,7 +100,7 @@ create final outer .star archive
 clean up temporary files
 ```
 
-SmartTAR STAR v1.2.2 replaces this with a full sequential publishing model:
+SmartTAR - STAR v1.2.2 replaces this with a full sequential publishing model:
 
 ```text
 create one block
@@ -145,7 +145,7 @@ This keeps the internal work folder out of the way while preserving predictable 
 
 ## Compact Manifest
 
-SmartTAR STAR v1.2.2 uses a compact production manifest by default.
+SmartTAR - STAR v1.2.2 uses a compact production manifest by default.
 
 The manifest now focuses on:
 
@@ -198,7 +198,7 @@ This gives SmartTAR a cleaner production manifest while keeping development diag
 
 ## Manifest-Based File Deduplication
 
-SmartTAR STAR v1.2.2 keeps the unique-only manifest alias dedup model.
+SmartTAR - STAR v1.2.2 keeps the unique-only manifest alias dedup model.
 
 Duplicate files are omitted from data blocks and restored during extraction from manifest aliases.
 
@@ -296,7 +296,7 @@ Store - no compression
 
 ## STAR Format Compatibility
 
-SmartTAR STAR v1.2.2 keeps the STAR archive format version compatible with the existing v1.x layout.
+SmartTAR - STAR v1.2.2 keeps the STAR archive format version compatible with the existing v1.x layout.
 
 The internal manifest still uses:
 
@@ -379,7 +379,7 @@ Manifest position: last-outer-entry
 
 ## Validation Summary
 
-SmartTAR STAR v1.2.2 was validated across the main workflows:
+SmartTAR - STAR v1.2.2 was validated across the main workflows:
 
 ```text
 Smart - max compression   OK
@@ -462,7 +462,7 @@ salvage-friendly block layout
 
 ## Design Philosophy
 
-SmartTAR STAR is not intended to replace specialized compression engines.
+SmartTAR - STAR is not intended to replace specialized compression engines.
 
 Instead, SmartTAR focuses on:
 
@@ -484,7 +484,7 @@ SmartTAR gets more practical value from the built-in Windows archiving backend t
 
 ## Summary
 
-SmartTAR STAR v1.2.2 is a stability and architecture cleanup release for the STAR v1.2 line.
+SmartTAR - STAR v1.2.2 is a stability and architecture cleanup release for the STAR v1.2 line.
 
 Main improvements:
 
