@@ -4,6 +4,7 @@
 # SmartTAR - STAR 1.3.1
 
 - Added Royal Black Noir interface
+- Rebuilt with a lightweight launcher to reduce file size and eliminate the console window
 
 # SmartTAR - STAR 1.3.0
 
