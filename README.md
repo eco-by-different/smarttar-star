@@ -1,5 +1,5 @@
-![Repo size](https://img.shields.io/github/repo-size/eco-by-different/winzstd)
-![Last commit](https://img.shields.io/github/last-commit/eco-by-different/winzstd)
+![Repo size](https://img.shields.io/github/repo-size/eco-by-different/smarttar-star)
+![Last commit](https://img.shields.io/github/last-commit/eco-by-different/smarttar-star)
 
 # SmartTAR - STAR 1.3.1
 
