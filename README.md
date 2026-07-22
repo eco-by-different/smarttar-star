@@ -41,7 +41,7 @@ If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` scri
 
 ## SmartTAR - STAR 1.3.1
 
-### Release Notes
+## Release Notes
 
 - Added Royal Black Noir interface
 - Rebuilt with a lightweight launcher to reduce file size and eliminate the console window
