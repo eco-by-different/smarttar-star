@@ -3,22 +3,6 @@
 
 # SmartTAR 1.3.2
 
-- Added selective RAM-streamed extraction in Browse Mode.
-- Only blocks required for the selected file or folder are processed.
-- Reduced temporary disk usage during selective extraction.
-- Added selective restoration of deduplicated files.
-- Simplified the Browse tree by displaying the stored source root directly.
-- Root selection continues to use the standard full extraction pipeline.
-- Added automatic fallback to the disk-backed extraction method when required.
-- STAR format version remains unchanged and existing archives remain compatible.
-
-## SmartTAR - STAR 1.3.1
-
-- Added Royal Black Noir interface
-- Rebuilt with a lightweight launcher to reduce file size and eliminate the console window
-
-## SmartTAR - STAR 1.3.0
-
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
 
 SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`. The output **is, and always will be, a standard TAR archive** – just encapsulated within an intelligent `.star` container that holds all the necessary data blocks and manifests.
@@ -31,17 +15,14 @@ SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`
 
 ## Release Notes
 
-- Added PAX TAR outer container for large block support.
-- Added publish-confirm check before manifest commit.
-- Minified `manifest.json` with `ConvertTo-Json -Depth 40 -Compress`.
-- Added Smart mode second-pass probe for `archives`: STORE vs ZSTD19 vs XZ9.
-- Added Browse mode for STAR archives.
-- Added selective extraction from Browse tree.
-- Fixed Browse extraction to respect “Open output folder after success”.
-- Updated GUI/version to SmartTAR STAR 1.3.0.
-
----
-
+- Added selective RAM-streamed extraction in Browse Mode.
+- Only blocks required for the selected file or folder are processed.
+- Reduced temporary disk usage during selective extraction.
+- Added selective restoration of deduplicated files.
+- Simplified the Browse tree by displaying the stored source root directly.
+- Root selection continues to use the standard full extraction pipeline.
+- Added automatic fallback to the disk-backed extraction method when required.
+- STAR format version remains unchanged and existing archives remain compatible.
 # Antivirus Notice (False Positives)
 
 The `.exe` binary is generated using PS2EXE, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
@@ -58,9 +39,31 @@ If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` scri
 
 ---
 
-## SmartTAR - STAR 1.2.2
+## SmartTAR - STAR 1.3.1
 
-## Release Title
+### Release Notes
+
+- Added Royal Black Noir interface
+- Rebuilt with a lightweight launcher to reduce file size and eliminate the console window
+
+---
+
+## SmartTAR - STAR 1.3.0
+
+## Release Notes
+
+- Added PAX TAR outer container for large block support.
+- Added publish-confirm check before manifest commit.
+- Minified `manifest.json` with `ConvertTo-Json -Depth 40 -Compress`.
+- Added Smart mode second-pass probe for `archives`: STORE vs ZSTD19 vs XZ9.
+- Added Browse mode for STAR archives.
+- Added selective extraction from Browse tree.
+- Fixed Browse extraction to respect “Open output folder after success”.
+- Updated GUI/version to SmartTAR STAR 1.3.0.
+
+---
+
+## SmartTAR - STAR 1.2.2
 
 **v1.2.2 - Full Sequential Build Pipeline, Compact Manifest, Hidden Work Folder, and Stable STAR Compatibility**
 
