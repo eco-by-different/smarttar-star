@@ -1,7 +1,7 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/smarttar-star)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/smarttar-star)
 
-## SmartTAR 1.3.2
+# SmartTAR 1.3.2
 
 - Added selective RAM-streamed extraction in Browse Mode.
 - Only blocks required for the selected file or folder are processed.
