@@ -1,6 +1,17 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/smarttar-star)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/smarttar-star)
 
+## SmartTAR 1.3.2
+
+- Added selective RAM-streamed extraction in Browse Mode.
+- Only blocks required for the selected file or folder are processed.
+- Reduced temporary disk usage during selective extraction.
+- Added selective restoration of deduplicated files.
+- Simplified the Browse tree by displaying the stored source root directly.
+- Root selection continues to use the standard full extraction pipeline.
+- Added automatic fallback to the disk-backed extraction method when required.
+- STAR format version remains unchanged and existing archives remain compatible.
+
 # SmartTAR - STAR 1.3.1
 
 - Added Royal Black Noir interface
