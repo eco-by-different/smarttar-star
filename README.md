@@ -12,12 +12,12 @@
 - Added automatic fallback to the disk-backed extraction method when required.
 - STAR format version remains unchanged and existing archives remain compatible.
 
-# SmartTAR - STAR 1.3.1
+## SmartTAR - STAR 1.3.1
 
 - Added Royal Black Noir interface
 - Rebuilt with a lightweight launcher to reduce file size and eliminate the console window
 
-# SmartTAR - STAR 1.3.0
+## SmartTAR - STAR 1.3.0
 
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
 
