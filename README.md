@@ -17,12 +17,16 @@ SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`
 
 - Added selective RAM-streamed extraction in Browse Mode.
 - Only blocks required for the selected file or folder are processed.
-- Reduced temporary disk usage during selective extraction.
 - Added selective restoration of deduplicated files.
-- Simplified the Browse tree by displaying the stored source root directly.
-- Root selection continues to use the standard full extraction pipeline.
-- Added automatic fallback to the disk-backed extraction method when required.
+- Reduced temporary disk usage during selective extraction.
+- Simplified the Browse tree to display the stored source root directly.
+- Moved parallel content analysis from PowerShell Runspaces to C# TPL.
+- Unified byte-sample statistics into a single analysis pass.
+- Reduced CPU and memory-bandwidth overhead when analyzing large file sets.
+- Removed unused code and simplified GUI object initialization.
+- Preserved full extraction, Verify, Salvage and compatibility fallback paths.
 - STAR format version remains unchanged and existing archives remain compatible.
+
 # Antivirus Notice (False Positives)
 
 The `.exe` binary is generated using PS2EXE, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
