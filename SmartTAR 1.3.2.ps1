@@ -482,14 +482,6 @@ function Convert-ToLocalPath {
     return ([string]$Path).Replace([char]47, [System.IO.Path]::DirectorySeparatorChar)
 }
 
-function New-UiObject {
-    param([string]$Type, [hashtable]$Properties)
-    $object = New-Object $Type
-    foreach ($key in $Properties.Keys) {
-        $object.$key = $Properties[$key]
-    }
-    return $object
-}
 
 function Trim-PathSeparators {
     param([string]$Text)
@@ -873,9 +865,7 @@ $cSurfaceAlt   = [System.Drawing.ColorTranslator]::FromHtml('#2D3340')
 $cInput        = [System.Drawing.ColorTranslator]::FromHtml('#15171C')
 $cText         = [System.Drawing.ColorTranslator]::FromHtml('#E3E6EB')
 $cTextMuted    = [System.Drawing.ColorTranslator]::FromHtml('#A9B1BF')
-$cTextDisabled = [System.Drawing.ColorTranslator]::FromHtml('#707986')
 $cGray         = [System.Drawing.ColorTranslator]::FromHtml('#505968')
-$cBorderSoft   = [System.Drawing.ColorTranslator]::FromHtml('#3A414D')
 $cRoyal        = [System.Drawing.ColorTranslator]::FromHtml('#4B6698')
 $cRoyalHover   = [System.Drawing.ColorTranslator]::FromHtml('#607DB0')
 $cRoyalActive  = [System.Drawing.ColorTranslator]::FromHtml('#38527E')
@@ -887,7 +877,6 @@ $cVerifyHover  = [System.Drawing.ColorTranslator]::FromHtml('#596574')
 $cWarning      = [System.Drawing.ColorTranslator]::FromHtml('#D0A354')
 $cDanger       = [System.Drawing.ColorTranslator]::FromHtml('#C65E62')
 $cStatusOk     = [System.Drawing.ColorTranslator]::FromHtml('#72B88A')
-$cSalvage      = [System.Drawing.ColorTranslator]::FromHtml('#74618E')
 $cButtonText   = [System.Drawing.ColorTranslator]::FromHtml('#F2F4F7')
 
 $fNormal = [System.Drawing.Font]::new('Segoe UI', 9)
@@ -1245,11 +1234,6 @@ function Invoke-NativeAdaptiveAnalysis {
     }
 }
 
-function Get-AdaptiveSampleDiagnostics {
-    param($File)
-    return (Invoke-NativeAdaptiveAnalysis $File)
-}
-
 function New-AdaptiveStats {
     $scope=[string]$script:analysisScope; if(Test-Blank $scope){$scope='None'}
     $enabled=Test-ContentAnalysisEnabled $scope
@@ -1290,19 +1274,6 @@ function Add-AdaptiveDecisionStat {
         'binary' {$script:adaptiveStats.movedToBinary=[int]$script:adaptiveStats.movedToBinary+1; $script:adaptiveStats.movedToBinaryBytes=[int64]$script:adaptiveStats.movedToBinaryBytes+$Bytes}
         'archives' {$script:adaptiveStats.movedToArchives=[int]$script:adaptiveStats.movedToArchives+1; $script:adaptiveStats.movedToArchivesBytes=[int64]$script:adaptiveStats.movedToArchivesBytes+$Bytes}
         default {$script:adaptiveStats.stayedUnknown=[int]$script:adaptiveStats.stayedUnknown+1; $script:adaptiveStats.stayedUnknownBytes=[int64]$script:adaptiveStats.stayedUnknownBytes+$Bytes}
-    }
-}
-
-function Get-AdaptiveSmartGroupName {
-    param($File)
-    try {
-        $result = Invoke-NativeAdaptiveAnalysis $File
-        $decision = [string]$result.Decision
-        if (Test-Blank $decision) { return 'unknown' }
-        return $decision
-    }
-    catch {
-        return 'unknown'
     }
 }
 
@@ -2796,7 +2767,6 @@ function Verify-SmartArchive {
                 foreach($entry in @(([string]$listResult.Output) -split "`r?`n")){
                     if(Test-Blank $entry){continue}
                     if(-not (Test-RelativePathSafe $entry)){ $listed=$false; $lines+="UNSAFE ENTRY: $($block.path) -> $entry"; break }
-                    $norm=(Convert-ToTarPath $entry).TrimStart('./')
                 }
             }
             $hashOk=$true; if($block.sha256){$hashOk=((Get-FileSHA256 $blockPath) -eq ([string]$block.sha256).ToLowerInvariant())}
@@ -3593,8 +3563,7 @@ function Start-WorkerOperation {
         [string]$SourcePath,
         [string]$DestinationPath,
         [string]$Mode = 'Balanced',
-        [bool]$Salvage = $false,
-        [bool]$AdaptiveDeepAnalyze = $false
+        [bool]$Salvage = $false
     )
 
     if (Test-Blank $SourcePath -or -not (Test-Path -LiteralPath $SourcePath)) {
@@ -3871,7 +3840,7 @@ function New-EcoLabel {
         [System.Drawing.Color]$ForeColor = $cText
     )
 
-    return New-UiObject 'System.Windows.Forms.Label' @{
+    return [System.Windows.Forms.Label]@{
         Text      = $Text
         Location  = (New-Point $X $Y)
         Size      = (New-Size $Width $Height)
@@ -3893,7 +3862,7 @@ function New-EcoButton {
         [System.Drawing.Color]$ForeColor = $cText
     )
 
-    $button = New-UiObject 'System.Windows.Forms.Button' @{
+    $button = [System.Windows.Forms.Button]@{
         Text                    = $Text
         Location                = (New-Point $X $Y)
         Size                    = (New-Size $Width $Height)
@@ -3919,7 +3888,7 @@ function New-EcoButton {
 function New-EcoCheck {
     param([string]$Text, [int]$X, [int]$Y, [int]$Width, [bool]$Checked = $true)
 
-    return New-UiObject 'System.Windows.Forms.CheckBox' @{
+    return [System.Windows.Forms.CheckBox]@{
         Text                     = $Text
         Location                 = (New-Point $X $Y)
         Size                     = (New-Size $Width 22)
@@ -3977,7 +3946,7 @@ function Show-ArchiveAddBrowseChoice {
     return [string]$script:archiveAddBrowseChoice
 }
 
-$form = New-UiObject 'System.Windows.Forms.Form' @{
+$form = [System.Windows.Forms.Form]@{
     Text            = 'SmartTAR - STAR 1.3.2  .:: Copyright © 2026 eco-by-different ::.'
     ClientSize      = (New-Size 505 490)
     StartPosition   = 'CenterScreen'
@@ -3995,7 +3964,7 @@ $lblSelected = New-EcoLabel 'Selected: none' 20 88 465 20 $fItalic $cTextMuted
 try { $lblSelected.UseMnemonic = $false; $lblSelected.AutoEllipsis = $true } catch {}
 
 $lblTarget = New-EcoLabel '2. Destination archive / extraction parent folder:' 20 125 -Font $fBold
-$txtTarget = New-UiObject 'System.Windows.Forms.TextBox' @{
+$txtTarget = [System.Windows.Forms.TextBox]@{
     Location      = (New-Point 20 153)
     Size          = (New-Size 395 23)
     Font          = $fNormal
@@ -4009,7 +3978,7 @@ $txtTarget = New-UiObject 'System.Windows.Forms.TextBox' @{
 $btnTarget = New-EcoButton '...' 422 152 63 24
 
 $lblMode = New-EcoLabel '3. Compression profile:' 20 195 -Font $fBold
-$cmbMode = New-UiObject 'System.Windows.Forms.ComboBox' @{
+$cmbMode = [System.Windows.Forms.ComboBox]@{
     Location      = (New-Point 20 223)
     Size          = (New-Size 465 24)
     Font          = $fNormal
@@ -4045,7 +4014,7 @@ $chkAdaptive.Enabled = $false
 $chkSalvageMode = New-EcoCheck 'Salvage mode (Ignore broken blocks)' 20 366 330 $false
 
 $lblStatus = New-EcoLabel 'Ready.' 20 404 465 20 $fItalic $cTextMuted
-$progressBar = New-UiObject 'System.Windows.Forms.ProgressBar' @{
+$progressBar = [System.Windows.Forms.ProgressBar]@{
     Location = (New-Point 20 447)
     Size     = (New-Size 465 8)
     Style    = [System.Windows.Forms.ProgressBarStyle]::Marquee
