@@ -1,6 +1,57 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/smarttar-star)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/smarttar-star)
 
+# SmartTAR 1.4.0
+
+**SmartTAR STAR** is a Windows PowerShell GUI archiver and backup tool built around the Windows `tar.exe` / bsdtar engine.
+
+Version **1.4.0** introduces a block-based additive archive model with global file deduplication, independently selectable compression modes for each ADD generation, selective recovery, full integrity verification, and a canonical single-manifest layout.
+
+SmartTAR is not only a TAR frontend. The `.star` format is a portable, single-file, block-based and deduplicating archive format designed for transparent recovery.
+
+**A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
+
+### Core Principles
+* **Built in Windows, for Windows:** It relies exclusively on tools and components that are already baked into the operating system (Windows 10/11).
+* **Zero External Dependencies:** No external libraries, no DLLs, and no third-party software installations required (100% portable).
+* **Maximum System Cleanliness:** The application leaves zero footprint. It creates nothing but its own temporary working files, which are completely cleaned up immediately after completion.
+* **Smart Deployment:** A lightweight, single-file solution ready to be deployed and used anywhere instantly.
+
+## Highlights
+
+- Portable single-file `.star` archives
+- Windows PowerShell WinForms GUI
+- Built on standard TAR-compatible containers and blocks
+- Compression modes: **Balanced**, **Smart**, **Solid**, and **Store**
+- Timestamped ADD generations
+- Global deduplication of every non-empty byte-identical file
+- Deduplication independent of path, ADD generation, and selected compression mode
+- Immutable existing data blocks during ADD
+- One canonical `manifest.json` as the final logical archive entry
+- Selective Browse and Extract
+- Full archive extraction with separate original and ADD trees
+- SHA-256 block verification
+- Alias target and alias-size verification
+- Transactional ADD with verification before publication
+- Persistent TXT reports for Create, ADD, Extract, and Verify
+- Read compatibility with released STAR v1 archives
+
+# Antivirus Notice (False Positives)
+
+The `.exe` binary is generated using PS2EXE, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
+
+The underlying PowerShell script is clean.  
+If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` script instead.
+
+---
+
+## Screenshot
+
+
+![SmartTAR screenshot](docs/images/smarttar-gui.png)
+
+---
+
 # SmartTAR 1.3.2
 
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
@@ -26,20 +77,6 @@ SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`
 - Removed unused code and simplified GUI object initialization.
 - Preserved full extraction, Verify, Salvage and compatibility fallback paths.
 - STAR format version remains unchanged and existing archives remain compatible.
-
-# Antivirus Notice (False Positives)
-
-The `.exe` binary is generated using PS2EXE, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
-
-The underlying PowerShell script is clean.  
-If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` script instead.
-
----
-
-## Screenshot
-
-
-![SmartTAR screenshot](docs/images/smarttar-gui.png)
 
 ---
 
