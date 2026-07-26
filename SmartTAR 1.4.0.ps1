@@ -941,6 +941,10 @@ $script:currentStdOut = ''
 $script:currentStdErr = ''
 Reset-SmartTarRuntimeState
 $script:IncludeDebugDiagnosticsInManifest = $false
+$script:buildPipeline = 'full-sequential-block-publish'
+$script:compressionWorkerLimit = 1
+$script:compressionPeakWorkers = 1
+$script:compressionMemoryThrottleEvents = 0
 $script:ExportDebugBundle = $false
 $script:KeepDebugArtifacts = $false
 
@@ -2359,6 +2363,292 @@ function Complete-StarOuterArchive {
     Move-Item -LiteralPath $TempArchive -Destination $Destination -Force
 }
 
+
+
+function Get-CompressionWorkerLimit {
+    param([int]$PendingBlocks = 1)
+
+    $logical = [Math]::Max(1, [Environment]::ProcessorCount)
+    $cpuLimit = [Math]::Max(1, [int][Math]::Floor([double]$logical * 0.5))
+    $cpuLimit = [Math]::Min(4, $cpuLimit)
+    return [Math]::Max(1, [Math]::Min([Math]::Max(1, $PendingBlocks), $cpuLimit))
+}
+
+function Get-SmartTarMemorySnapshot {
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        return [pscustomobject]@{
+            TotalBytes = [int64]$os.TotalVisibleMemorySize * 1KB
+            AvailableBytes = [int64]$os.FreePhysicalMemory * 1KB
+        }
+    }
+    catch {
+        try {
+            $info = New-Object Microsoft.VisualBasic.Devices.ComputerInfo
+            return [pscustomobject]@{
+                TotalBytes = [int64]$info.TotalPhysicalMemory
+                AvailableBytes = [int64]$info.AvailablePhysicalMemory
+            }
+        }
+        catch {
+            return [pscustomobject]@{ TotalBytes = [int64]0; AvailableBytes = [int64]0 }
+        }
+    }
+}
+
+function Get-CompressionWorkerMemoryEstimate {
+    param([hashtable]$Method)
+    switch ([string]$Method.Algorithm) {
+        'xz'   { return [int64](1536MB) }
+        'zstd' { return [int64](1024MB) }
+        default { return [int64](256MB) }
+    }
+}
+
+function Test-CompressionWorkerMemorySafe {
+    param([hashtable]$Method, [int64]$ActiveEstimatedBytes = 0)
+
+    $memory = Get-SmartTarMemorySnapshot
+    if ([int64]$memory.TotalBytes -le 0 -or [int64]$memory.AvailableBytes -le 0) {
+        # If Windows memory telemetry is unavailable, keep the CPU-derived
+        # worker limit but do not fail archive creation.
+        return $true
+    }
+
+    $reserve = [Math]::Max([int64](2GB), [int64]([double]$memory.TotalBytes * 0.20))
+    $next = Get-CompressionWorkerMemoryEstimate $Method
+    return (([int64]$memory.AvailableBytes - [int64]$ActiveEstimatedBytes - [int64]$next) -ge $reserve)
+}
+
+function Convert-ToProcessArgumentString {
+    param($Arguments)
+    $quoted = foreach ($item in @($Arguments)) {
+        $value = [string]$item
+        if ($value.Length -eq 0) { '""'; continue }
+        if ($value -notmatch '[\s"]') { $value; continue }
+        # Windows paths cannot contain a literal quote. All arguments used by
+        # the block builder are therefore safely represented by surrounding
+        # whitespace-bearing values with quotes.
+        '"' + $value + '"'
+    }
+    return ($quoted -join ' ')
+}
+
+function Start-TarBlockProcess {
+    param([string]$TarPath, $TarArgs)
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $TarPath
+    $psi.Arguments = Convert-ToProcessArgumentString $TarArgs
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+
+    $process = [System.Diagnostics.Process]::Start($psi)
+    try { $process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
+    return [pscustomobject]@{
+        Process = $process
+        OutputTask = $process.StandardOutput.ReadToEndAsync()
+        ErrorTask = $process.StandardError.ReadToEndAsync()
+    }
+}
+
+function New-ParallelGroupBlockJob {
+    param([string]$TarPath,[string]$WorkRoot,[string]$BlocksDir,[string]$JobRoot,[string]$BlockId,[hashtable]$Group,[bool]$AllowGroupCopyFallback,[string]$BlockSuffix='')
+
+    $safeGroup = [string]$Group.Name
+    $blockPath = Join-Path $BlocksDir ("$BlockId`_$safeGroup$BlockSuffix$($Group.Method.Extension)")
+    $stageRoot = $null
+    $stdout = Join-Path $JobRoot ("$BlockId.stdout.txt")
+    $stderr = Join-Path $JobRoot ("$BlockId.stderr.txt")
+    try {
+        $stageRoot = New-GroupHardlinkStage $WorkRoot @($Group.Files) $AllowGroupCopyFallback
+        [void](Normalize-XzStageIfNeeded $stageRoot $Group.Method)
+        $args = @($Group.Method.CreateArgs) + @($blockPath, '-C', $stageRoot, '.')
+        $processData = Start-TarBlockProcess $TarPath $args
+        return [pscustomobject]@{
+            Id=$BlockId; Group=$Group; GroupName=$safeGroup; BlockPath=$blockPath
+            StageRoot=$stageRoot; Process=$processData.Process; OutputTask=$processData.OutputTask; ErrorTask=$processData.ErrorTask; StdOut=$stdout; StdErr=$stderr
+            MemoryEstimate=(Get-CompressionWorkerMemoryEstimate $Group.Method)
+            StartedUtc=[datetime]::UtcNow
+        }
+    }
+    catch {
+        Remove-SmartTarTempFolder $stageRoot
+        Remove-Item -LiteralPath $blockPath -Force -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
+function Complete-ParallelGroupBlockJob {
+    param($Job)
+    $Job.Process.WaitForExit()
+    $exitCode = [int]$Job.Process.ExitCode
+    $errorText = [string]$Job.ErrorTask.Result
+    $outputText = [string]$Job.OutputTask.Result
+    try { $Job.Process.Dispose() } catch {}
+    Remove-SmartTarTempFolder $Job.StageRoot
+    Remove-Item -LiteralPath $Job.StdOut,$Job.StdErr -Force -ErrorAction SilentlyContinue
+    if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $Job.BlockPath -PathType Leaf)) {
+        Remove-Item -LiteralPath $Job.BlockPath -Force -ErrorAction SilentlyContinue
+        $detail = if (-not (Test-Blank $errorText)) { $errorText.Trim() } elseif (-not (Test-Blank $outputText)) { $outputText.Trim() } else { 'No tar.exe output captured.' }
+        return [pscustomobject]@{ Ok=$false; Job=$Job; Error="tar.exe exit code: $exitCode`r`n$detail" }
+    }
+    return [pscustomobject]@{ Ok=$true; Job=$Job; Error='' }
+}
+
+function Build-AndPublishBlocksParallel {
+    param([string]$TarPath,[hashtable]$Groups,[string]$BlocksDir,[string]$WorkRoot,[string]$StructureStage,[int]$StructureDirCount,[hashtable]$StoreMethod,[bool]$AllowGroupCopyFallback,[string]$OuterArchivePath,[int]$StartIndex = 1,[string]$BlockSuffix = '')
+
+    $script:lastGroupDiagnostics = @()
+    $script:buildPipeline = 'parallel-block-build-sequential-publish'
+    $blocks = @()
+    $index = [Math]::Max(1, $StartIndex)
+
+    # The small structure block remains sequential and is published first.
+    if ($StructureDirCount -gt 0) {
+        $id = '{0:D6}' -f $index
+        $structureMethod = Get-TarMethodByName 'xz9'; if ($null -eq $structureMethod) { $structureMethod = $StoreMethod }
+        $blockPath = Join-Path $BlocksDir ("$id`_structure$BlockSuffix$($structureMethod.Extension)")
+        $structureReason = 'Directory structure only. Metadata-friendly XZ9 structure block.'
+        try { Set-BusyStatus "Creating block $id structure..."; Create-BlockFromStageDirect $TarPath $StructureStage $blockPath $structureMethod }
+        catch {
+            if ([string]$structureMethod.Name -ne [string]$StoreMethod.Name) {
+                Remove-Item -LiteralPath $blockPath -Force -ErrorAction SilentlyContinue
+                $structureMethod = $StoreMethod
+                $blockPath = Join-Path $BlocksDir ("$id`_structure$BlockSuffix$($structureMethod.Extension)")
+                $structureReason = 'Directory structure only. XZ9 structure block failed; STORE fallback used.'
+                Create-BlockFromStageDirect $TarPath $StructureStage $blockPath $structureMethod
+            } else { throw }
+        }
+        Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $id 'structure' $blockPath $structureMethod $structureReason 0 $StructureDirCount 0
+        Remove-SmartTarTempFolder $StructureStage
+        $index++
+    }
+
+    $pending = New-Object System.Collections.ArrayList
+    foreach ($groupName in $Groups.Keys) {
+        $group = $Groups[$groupName]
+        if ([int]$group.FileCount -gt 0) {
+            [void]$pending.Add([pscustomobject]@{ Id=('{0:D6}' -f $index); Group=$group })
+            $index++
+        }
+    }
+    if ($pending.Count -lt 1) { return $blocks }
+
+    $workerLimit = Get-CompressionWorkerLimit $pending.Count
+    $script:compressionWorkerLimit = $workerLimit
+    $script:compressionPeakWorkers = 0
+    $script:compressionMemoryThrottleEvents = 0
+    $jobRoot = Join-Path $WorkRoot 'compression_jobs'
+    [System.IO.Directory]::CreateDirectory($jobRoot) | Out-Null
+    $active = New-Object System.Collections.ArrayList
+    $completed = New-Object System.Collections.ArrayList
+    $fallbackGroups = New-Object System.Collections.ArrayList
+
+    try {
+        while ($pending.Count -gt 0 -or $active.Count -gt 0) {
+            $startedOne = $false
+            while ($pending.Count -gt 0 -and $active.Count -lt $workerLimit) {
+                $next = $pending[0]
+                $activeEstimate = [int64]0
+                foreach ($running in @($active)) { $activeEstimate += [int64]$running.MemoryEstimate }
+                if (-not (Test-CompressionWorkerMemorySafe $next.Group.Method $activeEstimate)) {
+                    $script:compressionMemoryThrottleEvents++
+                    break
+                }
+                [void]$pending.RemoveAt(0)
+                try {
+                    Set-BusyStatus "Starting parallel block $($next.Id) $($next.Group.Name) ($($active.Count + 1)/$workerLimit)..."
+                    $job = New-ParallelGroupBlockJob $TarPath $WorkRoot $BlocksDir $jobRoot $next.Id $next.Group $AllowGroupCopyFallback $BlockSuffix
+                    [void]$active.Add($job)
+                    if ($active.Count -gt $script:compressionPeakWorkers) { $script:compressionPeakWorkers = $active.Count }
+                    $startedOne = $true
+                }
+                catch {
+                    Add-GroupDiagnostic ([string]$next.Group.Name) 'fallback-chunked' ('Parallel group stage failed. ' + $_.Exception.Message) ([int]$next.Group.FileCount) ([int64]$next.Group.Bytes)
+                    [void]$fallbackGroups.Add([pscustomobject]@{ Group=$next.Group; Error=$_.Exception.Message })
+                }
+            }
+
+            $finished = @($active | Where-Object { $_.Process.HasExited } | Sort-Object Id)
+            if ($finished.Count -lt 1 -and $active.Count -gt 0) {
+                Start-Sleep -Milliseconds 100
+                continue
+            }
+            foreach ($job in $finished) {
+                [void]$active.Remove($job)
+                $result = Complete-ParallelGroupBlockJob $job
+                if ($result.Ok) {
+                    [void]$completed.Add($job)
+                    $message = 'Created in the parallel block worker pool.'
+                    if ($AllowGroupCopyFallback) { $message += ' Copy fallback was allowed if hardlinks were unavailable.' }
+                    Add-GroupDiagnostic $job.GroupName 'parallel-group-stage-ok' $message ([int]$job.Group.FileCount) ([int64]$job.Group.Bytes)
+                }
+                else {
+                    Add-GroupDiagnostic $job.GroupName 'fallback-chunked' ('Parallel group block failed. ' + $result.Error) ([int]$job.Group.FileCount) ([int64]$job.Group.Bytes)
+                    [void]$fallbackGroups.Add([pscustomobject]@{ Group=$job.Group; Error=$result.Error })
+                }
+            }
+
+            if (-not $startedOne -and $active.Count -lt 1 -and $pending.Count -gt 0) {
+                # One worker is always permitted. This avoids a deadlock on a
+                # memory-constrained machine while still preserving the system
+                # reserve whenever parallelism is optional.
+                $next = $pending[0]; [void]$pending.RemoveAt(0)
+                $job = New-ParallelGroupBlockJob $TarPath $WorkRoot $BlocksDir $jobRoot $next.Id $next.Group $AllowGroupCopyFallback $BlockSuffix
+                [void]$active.Add($job)
+                if ($active.Count -gt $script:compressionPeakWorkers) { $script:compressionPeakWorkers = $active.Count }
+            }
+        }
+
+        # Publish only after compression workers have stopped. Outer STAR writes
+        # stay deterministic and strictly sequential.
+        foreach ($job in @($completed | Sort-Object Id)) {
+            Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $job.Id $job.GroupName $job.BlockPath $job.Group.Method ([string]$job.Group.Reason + ' parallel group-stage block.') ([int]$job.Group.FileCount) 0 ([int64]$job.Group.Bytes)
+        }
+
+        # Preserve the proven fallback path. Failed parallel group attempts are
+        # split and rebuilt sequentially with fresh IDs after successful jobs.
+        foreach ($fallback in @($fallbackGroups)) {
+            $group = $fallback.Group
+            $chunks = Split-FileChunks -Files $group.Files
+            $part = 1
+            foreach ($chunkInfo in $chunks) {
+                $chunkFiles = @($chunkInfo.Files); if ($chunkFiles.Count -lt 1) { continue }
+                $id = '{0:D6}' -f $index; $index++
+                $suffix = if ($chunks.Count -gt 1) { '_p{0:D3}' -f $part } else { '' }
+                $fallbackGroup = ([string]$group.Name) + $suffix
+                $blockPath = Join-Path $BlocksDir ("$id`_$fallbackGroup$BlockSuffix$($group.Method.Extension)")
+                $chunkStage = $null
+                try {
+                    Set-BusyStatus "Creating fallback block $id $fallbackGroup..."
+                    $chunkStage = New-ChunkHardlinkStage $WorkRoot $chunkFiles
+                    $relativePaths = @($chunkFiles | ForEach-Object { [string]$_.Rel })
+                    Create-BlockFromStageList $TarPath $chunkStage $blockPath $group.Method $relativePaths
+                }
+                finally { Remove-SmartTarTempFolder $chunkStage }
+                $sourceBytes = [int64]0; foreach ($file in $chunkFiles) { $sourceBytes += [int64]$file.Bytes }
+                $reason = ([string]$group.Reason) + " Parallel group-stage failed, sequential chunk fallback used. Error: $($fallback.Error)"
+                Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $id $fallbackGroup $blockPath $group.Method $reason ([int]$chunkFiles.Count) 0 $sourceBytes
+                $part++
+            }
+        }
+        return $blocks
+    }
+    finally {
+        foreach ($job in @($active)) {
+            try { if (-not $job.Process.HasExited) { $job.Process.Kill() } } catch {}
+            try { $job.Process.Dispose() } catch {}
+            Remove-SmartTarTempFolder $job.StageRoot
+            Remove-Item -LiteralPath $job.BlockPath,$job.StdOut,$job.StdErr -Force -ErrorAction SilentlyContinue
+        }
+        Remove-SmartTarTempFolder $jobRoot
+    }
+}
+
 function Build-AndPublishBlocksSequential {
     param([string]$TarPath,[hashtable]$Groups,[string]$BlocksDir,[string]$WorkRoot,[string]$StructureStage,[int]$StructureDirCount,[hashtable]$StoreMethod,[bool]$AllowGroupCopyFallback,[string]$OuterArchivePath,[int]$StartIndex = 1,[string]$BlockSuffix = '')
     $script:lastGroupDiagnostics = @(); $blocks = @(); $index = [Math]::Max(1, $StartIndex)
@@ -2391,7 +2681,7 @@ function Build-Manifest {
     $aliasBytes = [int64]0
     foreach ($alias in @($script:planDedupAliases)) { $aliasBytes += [int64]$alias.bytes }
     $summary = [ordered]@{ storedUniqueBytes = $storedUniqueBytes; catalogFiles = if ($null -ne $script:planDiagnostics) { [int]$script:planDiagnostics.catalogFiles } else { 0 }; uniqueFiles = if ($null -ne $script:planDiagnostics) { [int]$script:planDiagnostics.uniqueFiles } else { 0 }; aliasFiles = @($script:planDedupAliases).Count; dedupAliasCount = @($script:planDedupAliases).Count; dedupAliasBytes = $aliasBytes }
-    $manifest = [ordered]@{ format = $script:FormatName; formatVersion = $script:FormatVersion; tool = 'SmartTAR'; toolVersion = $script:ToolVersion; createdUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); sourceName = $SourceLeaf; sourceType = if ($SourceItem.PSIsContainer) { 'Folder' } else { 'File' }; sourceBytes = Get-SourceSize $Source; compressionMode = $Mode; compressionProfile = $profileName; build = [ordered]@{ workrootMode = [string]$script:buildWorkMode; pipeline = 'full-sequential-block-publish'; blockCleanup = 'after-append'; manifestPosition = 'last-outer-entry'; outerTarFormat = 'pax' }; summary = $summary; dedupAliasMode = 'unique-only-restored-on-extract'; dedupAliases = @($script:planDedupAliases); blocks = @($Blocks) }
+    $manifest = [ordered]@{ format = $script:FormatName; formatVersion = $script:FormatVersion; tool = 'SmartTAR'; toolVersion = $script:ToolVersion; createdUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); sourceName = $SourceLeaf; sourceType = if ($SourceItem.PSIsContainer) { 'Folder' } else { 'File' }; sourceBytes = Get-SourceSize $Source; compressionMode = $Mode; compressionProfile = $profileName; build = [ordered]@{ workrootMode = [string]$script:buildWorkMode; pipeline = if (Test-Blank ([string]$script:buildPipeline)) { 'full-sequential-block-publish' } else { [string]$script:buildPipeline }; blockCleanup = 'after-append'; manifestPosition = 'last-outer-entry'; outerTarFormat = 'pax' }; summary = $summary; dedupAliasMode = 'unique-only-restored-on-extract'; dedupAliases = @($script:planDedupAliases); blocks = @($Blocks) }
     if ([bool]$script:IncludeDebugDiagnosticsInManifest) { $manifest.diagnostics = [ordered]@{ source = $Profile; adaptive = $script:adaptiveStats; fileDedup = $script:dedupStats; plan = $script:planDiagnostics } }
     return $manifest
 }
@@ -3620,7 +3910,7 @@ function Compress-SmartArchive {
     $blocksDir = Join-Path $work 'blocks'; $structureStage = Join-Path $work 'structure_stage'
     [System.IO.Directory]::CreateDirectory($blocksDir) | Out-Null; [System.IO.Directory]::CreateDirectory($structureStage) | Out-Null
     $outerTemp = ''; $published = $false
-    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceParent = Split-Path -Parent $Source; $sourceLeaf = Split-Path -Leaf $Source; if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }; if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; Invoke-SmartArchiveMethodProbes $TarPath $work $Mode $groups $capabilities; if ($Mode -eq 'Solid' -and $groups.Contains('solid')) { $groups.solid.Method = Select-AutoSolidMethod $capabilities $profile $script:adaptiveStats; $groups.solid.Reason = 'Solid single-block method selected from content profile.' }; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating sequential STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksSequential $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; $dataLayout=Get-StarOuterTarLayout $outerTemp; Set-ManifestCanonicalOuterLayout $manifest ([int64]$dataLayout.EndOfEntriesOffset); Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; $finalLayout=Get-StarOuterTarLayout $outerTemp; if([int]$finalLayout.ManifestCount -ne 1 -or [string]$finalLayout.LastEntryPath -ne 'manifest.json'){throw 'New STAR canonical manifest layout validation failed.'}; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
+    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceParent = Split-Path -Parent $Source; $sourceLeaf = Split-Path -Leaf $Source; if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }; if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; Invoke-SmartArchiveMethodProbes $TarPath $work $Mode $groups $capabilities; if ($Mode -eq 'Solid' -and $groups.Contains('solid')) { $groups.solid.Method = Select-AutoSolidMethod $capabilities $profile $script:adaptiveStats; $groups.solid.Reason = 'Solid single-block method selected from content profile.' }; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating optimized STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksParallel $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; $dataLayout=Get-StarOuterTarLayout $outerTemp; Set-ManifestCanonicalOuterLayout $manifest ([int64]$dataLayout.EndOfEntriesOffset); Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; $finalLayout=Get-StarOuterTarLayout $outerTemp; if([int]$finalLayout.ManifestCount -ne 1 -or [string]$finalLayout.LastEntryPath -ne 'manifest.json'){throw 'New STAR canonical manifest layout validation failed.'}; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
     finally { if (-not $published -and -not (Test-Blank $outerTemp) -and (Test-Path -LiteralPath $outerTemp)) { Remove-Item -LiteralPath $outerTemp -Force -ErrorAction SilentlyContinue }; Remove-SmartTarWorkAndRoot $work }
 }
 
