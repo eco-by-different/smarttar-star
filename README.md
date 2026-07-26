@@ -24,6 +24,7 @@ SmartTAR is not only a TAR frontend. The `.star` format is a portable, single-fi
 - Built on standard TAR-compatible containers and blocks
 - Compression modes: **Balanced**, **Smart**, **Solid**, and **Store**
 - Timestamped ADD generations
+- Adaptive parallel block compression
 - Global deduplication of every non-empty byte-identical file
 - Deduplication independent of path, ADD generation, and selected compression mode
 - Immutable existing data blocks during ADD
