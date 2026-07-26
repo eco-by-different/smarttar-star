@@ -529,14 +529,18 @@ function Normalize-ArchiveSourcePath {
 function Get-RelativePathFromBase {
     param([string]$BasePath, [string]$FullPath)
 
+    if (Test-Blank $BasePath -or Test-Blank $FullPath) { throw 'Cannot create a relative path from an empty path.' }
     $baseFull = Trim-PathSeparators ([System.IO.Path]::GetFullPath($BasePath))
     $pathFull = [System.IO.Path]::GetFullPath($FullPath)
     $prefix = $baseFull + [System.IO.Path]::DirectorySeparatorChar
 
-    if ($pathFull.ToLowerInvariant().StartsWith($prefix.ToLowerInvariant())) {
-        return $pathFull.Substring($prefix.Length)
+    if ($pathFull.Equals($baseFull, [System.StringComparison]::OrdinalIgnoreCase)) { return '.' }
+    if ($pathFull.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $relative = $pathFull.Substring($prefix.Length)
+        if (Test-Blank $relative) { throw "Relative path is empty. Base='$baseFull', Path='$pathFull'." }
+        return $relative
     }
-    return (Split-Path -Leaf $pathFull)
+    throw "Source item is outside the selected base path. Base='$baseFull', Path='$pathFull'."
 }
 
 function Format-Bytes {
@@ -1537,10 +1541,10 @@ function Register-FileDedupCandidate {
                 $script:dedupStats.duplicateFiles = [int]$script:dedupStats.duplicateFiles + 1
                 $script:dedupStats.duplicateBytes = [int64]$script:dedupStats.duplicateBytes + $bytes
                 return [pscustomobject]@{
-                    Path = [string]$entry.Path
-                    Rel = (Convert-ToTarPath ([string]$entry.Rel))
-                    Bytes = [int64]$entry.Bytes
-                    Hash = [string]$entry.Hash
+                    Path=[string]$entry.Path
+                    Rel=(Convert-ToTarPath ([string]$entry.Rel))
+                    Bytes=[int64]$entry.Bytes
+                    Hash=[string]$entry.Hash
                 }
             }
         }
@@ -1563,6 +1567,7 @@ function Initialize-SmartTarPlanningArtifacts {
     $script:planBuildPlanPath = ''
     $script:planItemId = [int64]0
     $script:planPathToRel = @{}
+    $script:planRelToPath = @{}
     $script:planFamilyKeys = @{}
     $script:planDedupAliases = @()
     $script:planDiagnostics = [ordered]@{
@@ -1632,110 +1637,36 @@ function Write-SmartTarJsonLine {
 
 function Add-SmartTarPlanCatalogItem {
     param([int64]$Id, $File, [string]$RelativePath, [string]$GroupName, [string]$SmartGroup)
-
     if ($null -eq $File -or $null -eq $script:planDiagnostics) { return }
-
-    $rel = Convert-ToTarPath $RelativePath
-    $path = [string]$File.FullName
-    $bytes = [int64]$File.Length
-    $script:planPathToRel[$path.ToLowerInvariant()] = $rel
-
-    $script:planDiagnostics.catalogFiles = [int]$script:planDiagnostics.catalogFiles + 1
-    $script:planDiagnostics.catalogBytes = [int64]$script:planDiagnostics.catalogBytes + $bytes
-
-    Write-SmartTarJsonLine $script:planCatalogPath ([ordered]@{
-        id = $Id
-        rel = $rel
-        path = $path
-        bytes = $bytes
-        group = [string]$GroupName
-        smartGroup = [string]$SmartGroup
-        lastWriteUtc = $File.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ')
-    })
+    $rel=(Convert-ToTarPath $RelativePath).Trim('/').Trim();$path=[string]$File.FullName;$bytes=[int64]$File.Length
+    if(Test-Blank $rel -or -not(Test-RelativePathSafe $rel)){throw "Unsafe planned archive path: $rel"}
+    $relKey=$rel.ToLowerInvariant()
+    if($script:planRelToPath.ContainsKey($relKey)){
+        $existing=[string]$script:planRelToPath[$relKey]
+        if(-not $existing.Equals($path,[System.StringComparison]::OrdinalIgnoreCase)){throw "Archive path collision: '$rel' maps both '$existing' and '$path'."}
+    }else{$script:planRelToPath[$relKey]=$path}
+    $script:planPathToRel[$path.ToLowerInvariant()]=$rel
+    $script:planDiagnostics.catalogFiles=[int]$script:planDiagnostics.catalogFiles+1;$script:planDiagnostics.catalogBytes=[int64]$script:planDiagnostics.catalogBytes+$bytes
+    Write-SmartTarJsonLine $script:planCatalogPath ([ordered]@{id=$Id;rel=$rel;path=$path;bytes=$bytes;group=[string]$GroupName;smartGroup=[string]$SmartGroup;lastWriteUtc=$File.LastWriteTimeUtc.ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ')})
 }
 
 function Add-SmartTarPlanItems {
-    param([int64]$Id, $File, [string]$RelativePath, [string]$GroupName, $LinkTarget)
-
-    if ($null -eq $File -or $null -eq $script:planDiagnostics) { return }
-
-    $rel = Convert-ToTarPath $RelativePath
-    $path = [string]$File.FullName
-    $bytes = [int64]$File.Length
-    $role = 'unique'
-    $targetPath = ''
-    $targetRel = ''
-    $targetBytes = [int64]0
-    $targetHash = ''
-    $family = ''
-
-    $hasTarget = ($null -ne $LinkTarget -and -not (Test-Blank ([string]$LinkTarget.Path)))
-    if ($hasTarget) {
-        $role = 'alias'
-        $targetPath = [string]$LinkTarget.Path
-        $targetRel = (Convert-ToTarPath ([string]$LinkTarget.Rel)).Trim('/').Trim()
-        $targetBytes = [int64]$LinkTarget.Bytes
-        $targetHash = [string]$LinkTarget.Hash
-
-        # A manifest alias must retain the exact archive-relative identity of
-        # the physical file that was hashed. Never reduce the target to a base
-        # file name: equal names can exist in many source subdirectories.
-        if (Test-Blank $targetRel -or -not (Test-RelativePathSafe $targetRel)) {
-            throw "Dedup target has no safe archive-relative path: $targetPath"
-        }
-        if ($targetBytes -ne $bytes) {
-            throw "Dedup target size changed during planning: $rel -> $targetRel. Alias=$bytes, target=$targetBytes."
-        }
-        if (-not $script:planPathToRel.ContainsKey($targetPath.ToLowerInvariant())) {
-            throw "Dedup physical target is not present in the unique-file plan: $targetPath"
-        }
-        $plannedRel = (Convert-ToTarPath ([string]$script:planPathToRel[$targetPath.ToLowerInvariant()])).Trim('/').Trim()
-        if (-not $plannedRel.Equals($targetRel, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Dedup target identity mismatch: planned='$plannedRel', hashed='$targetRel'."
-        }
-
-        $family = 'target:' + $targetRel.ToLowerInvariant()
-        $script:planDiagnostics.aliasFiles = [int]$script:planDiagnostics.aliasFiles + 1
-        $script:planDiagnostics.aliasBytes = [int64]$script:planDiagnostics.aliasBytes + $bytes
-        $script:planDiagnostics.aliasBuildSkippedFiles = [int]$script:planDiagnostics.aliasBuildSkippedFiles + 1
-        $script:planDiagnostics.aliasBuildSkippedBytes = [int64]$script:planDiagnostics.aliasBuildSkippedBytes + $bytes
-        $script:planDiagnostics.manifestAliasCount = [int]$script:planDiagnostics.manifestAliasCount + 1
-        $script:planDiagnostics.manifestAliasBytes = [int64]$script:planDiagnostics.manifestAliasBytes + $bytes
-
-        if (-not $script:planFamilyKeys.ContainsKey($family)) {
-            $script:planFamilyKeys[$family] = $true
-            $script:planDiagnostics.dedupFamilies = [int]$script:planDiagnostics.dedupFamilies + 1
-        }
-
-        $script:planDedupAliases += [ordered]@{
-            path = $rel
-            target = $targetRel
-            bytes = $bytes
-        }
-    }
-    else {
-        $script:planDiagnostics.uniqueFiles = [int]$script:planDiagnostics.uniqueFiles + 1
-        $script:planDiagnostics.uniqueBytes = [int64]$script:planDiagnostics.uniqueBytes + $bytes
-        $script:planDiagnostics.buildFiles = [int]$script:planDiagnostics.buildFiles + 1
-        $script:planDiagnostics.buildBytes = [int64]$script:planDiagnostics.buildBytes + $bytes
-    }
-
-    Write-SmartTarJsonLine $script:planDedupMapPath ([ordered]@{
-        id = $Id; rel = $rel; path = $path; bytes = $bytes; group = [string]$GroupName
-        role = $role; family = $family; targetRel = $targetRel; targetPath = $targetPath
-        targetBytes = $targetBytes; targetHash = $targetHash
-    })
-
-    if ($role -eq 'alias') {
-        Write-SmartTarJsonLine $script:planBuildPlanPath ([ordered]@{
-            id = $Id; role = 'alias'; rel = $rel; targetRel = $targetRel; bytes = $bytes
-        })
-    }
-    else {
-        Write-SmartTarJsonLine $script:planBuildPlanPath ([ordered]@{
-            id = $Id; role = 'file'; blockGroup = [string]$GroupName; rel = $rel; path = $path; bytes = $bytes
-        })
-    }
+    param([int64]$Id,$File,[string]$RelativePath,[string]$GroupName,$LinkTarget)
+    if($null-eq$File-or$null-eq$script:planDiagnostics){return}
+    $rel=(Convert-ToTarPath $RelativePath).Trim('/').Trim();$path=[string]$File.FullName;$bytes=[int64]$File.Length;$role='unique';$targetPath='';$targetRel='';$family=''
+    $hasTarget=($null-ne$LinkTarget-and-not(Test-Blank([string]$LinkTarget.Path)))
+    if($hasTarget){
+        $role='alias';$targetPath=[string]$LinkTarget.Path;$targetRel=(Convert-ToTarPath([string]$LinkTarget.Rel)).Trim('/').Trim();$targetBytes=[int64]$LinkTarget.Bytes
+        if(Test-Blank $targetRel-or-not(Test-RelativePathSafe $targetRel)){throw "Unsafe dedup target path: $targetRel"}
+        if($targetBytes-ne$bytes){throw "Dedup target size changed: $rel -> $targetRel. Alias=$bytes, target=$targetBytes."}
+        $key=$targetPath.ToLowerInvariant();if(-not$script:planPathToRel.ContainsKey($key)){throw "Dedup target is absent from unique plan: $targetPath"}
+        $planned=(Convert-ToTarPath([string]$script:planPathToRel[$key])).Trim('/').Trim();if(-not$planned.Equals($targetRel,[System.StringComparison]::OrdinalIgnoreCase)){throw "Dedup identity mismatch: '$planned' vs '$targetRel'."}
+        $family='target:'+$targetRel.ToLowerInvariant();$script:planDiagnostics.aliasFiles++;$script:planDiagnostics.aliasBytes=[int64]$script:planDiagnostics.aliasBytes+$bytes;$script:planDiagnostics.aliasBuildSkippedFiles++;$script:planDiagnostics.aliasBuildSkippedBytes=[int64]$script:planDiagnostics.aliasBuildSkippedBytes+$bytes;$script:planDiagnostics.manifestAliasCount++;$script:planDiagnostics.manifestAliasBytes=[int64]$script:planDiagnostics.manifestAliasBytes+$bytes
+        if(-not$script:planFamilyKeys.ContainsKey($family)){$script:planFamilyKeys[$family]=$true;$script:planDiagnostics.dedupFamilies++}
+        $script:planDedupAliases += [ordered]@{path=$rel;target=$targetRel;bytes=$bytes}
+    }else{$script:planDiagnostics.uniqueFiles++;$script:planDiagnostics.uniqueBytes=[int64]$script:planDiagnostics.uniqueBytes+$bytes;$script:planDiagnostics.buildFiles++;$script:planDiagnostics.buildBytes=[int64]$script:planDiagnostics.buildBytes+$bytes}
+    Write-SmartTarJsonLine $script:planDedupMapPath ([ordered]@{id=$Id;rel=$rel;path=$path;bytes=$bytes;group=[string]$GroupName;role=$role;family=$family;targetRel=$targetRel;targetPath=$targetPath})
+    if($role-eq'alias'){Write-SmartTarJsonLine $script:planBuildPlanPath ([ordered]@{id=$Id;role='alias';rel=$rel;targetRel=$targetRel;bytes=$bytes})}else{Write-SmartTarJsonLine $script:planBuildPlanPath ([ordered]@{id=$Id;role='file';blockGroup=[string]$GroupName;rel=$rel;path=$path;bytes=$bytes})}
 }
 
 function Invoke-ParallelAdaptiveAnalysis {
@@ -2369,76 +2300,22 @@ function Complete-StarOuterArchive {
     Move-Item -LiteralPath $TempArchive -Destination $Destination -Force
 }
 
-
-function Get-CompressionWorkerLimit {
-    param([int]$BlockCount)
-    $logical=[Math]::Max(1,[Environment]::ProcessorCount)
-    return [Math]::Max(1,[Math]::Min([Math]::Min(4,[int][Math]::Floor($logical*0.5)),[Math]::Max(1,$BlockCount)))
-}
-function Get-CompressionMemorySnapshot {
-    try{$os=Get-CimInstance Win32_OperatingSystem -ErrorAction Stop;return [pscustomobject]@{Total=[int64]$os.TotalVisibleMemorySize*1KB;Available=[int64]$os.FreePhysicalMemory*1KB}}catch{return [pscustomobject]@{Total=[int64]0;Available=[int64]0}}
-}
-function Get-CompressionMemoryEstimate { param([hashtable]$Method) switch([string]$Method.Algorithm){'xz'{return [int64](1536MB)}'zstd'{return [int64](1024MB)}default{return [int64](256MB)}} }
-function Test-CompressionMemorySafe {
-    param([hashtable]$Method,[int64]$ActiveEstimate)
-    $m=Get-CompressionMemorySnapshot;if($m.Total-le 0-or$m.Available-le 0){return $true}
-    $reserve=[Math]::Max([int64](2GB),[int64]([double]$m.Total*0.20))
-    return (($m.Available-$ActiveEstimate-(Get-CompressionMemoryEstimate $Method))-ge$reserve)
-}
-function Convert-ToProcessArgumentString {
-    param($Arguments)
-
-    $quoted = @()
-    foreach ($argument in @($Arguments)) {
-        $value = [string]$argument
-        if ($value -match '[\s"]') {
-            $quoted += ('"' + $value + '"')
-        }
-        else {
-            $quoted += $value
-        }
-    }
-    return ($quoted -join ' ')
-}
-function Start-TarAsync {
-    param([string]$TarPath,$Arguments)
-    $psi=New-Object System.Diagnostics.ProcessStartInfo;$psi.FileName=$TarPath;$psi.Arguments=Convert-ToProcessArgumentString $Arguments
-    $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
-    $pr=[System.Diagnostics.Process]::Start($psi);try{$pr.PriorityClass=[System.Diagnostics.ProcessPriorityClass]::BelowNormal}catch{}
-    return [pscustomobject]@{Process=$pr;Out=$pr.StandardOutput.ReadToEndAsync();Err=$pr.StandardError.ReadToEndAsync()}
-}
-function Start-ParallelGroupJob {
-    param([string]$TarPath,[string]$WorkRoot,[string]$BlocksDir,[string]$Id,[hashtable]$Group,[bool]$AllowCopyFallback,[string]$BlockSuffix='')
-    $stage=$null;$block=Join-Path $BlocksDir ("$Id`_$($Group.Name)$BlockSuffix$($Group.Method.Extension)")
-    try{$stage=New-GroupHardlinkStage $WorkRoot @($Group.Files) $AllowCopyFallback;[void](Normalize-XzStageIfNeeded $stage $Group.Method)
-        $pd=Start-TarAsync $TarPath (@($Group.Method.CreateArgs)+@($block,'-C',$stage,'.'))
-        return [pscustomobject]@{Id=$Id;Group=$Group;Stage=$stage;Block=$block;Process=$pd.Process;Out=$pd.Out;Err=$pd.Err;Estimate=(Get-CompressionMemoryEstimate $Group.Method)}
-    }catch{Remove-SmartTarTempFolder $stage;Remove-Item -LiteralPath $block -Force -ErrorAction SilentlyContinue;throw}
-}
-function Complete-ParallelGroupJob {
-    param($Job)
-    $Job.Process.WaitForExit();$code=[int]$Job.Process.ExitCode;$err=[string]$Job.Err.Result;$out=[string]$Job.Out.Result;try{$Job.Process.Dispose()}catch{};Remove-SmartTarTempFolder $Job.Stage
-    if($code-ne 0-or-not(Test-Path -LiteralPath $Job.Block -PathType Leaf)){Remove-Item -LiteralPath $Job.Block -Force -ErrorAction SilentlyContinue;$d=if(-not(Test-Blank $err)){$err}elseif(-not(Test-Blank $out)){$out}else{'No tar.exe output captured.'};return [pscustomobject]@{Ok=$false;Error=$d}}
-    return [pscustomobject]@{Ok=$true;Error=''}
-}
+function Get-CompressionWorkerLimit { param([int]$Count) $n=[Math]::Max(1,[int][Math]::Floor([Environment]::ProcessorCount*0.5));return [Math]::Max(1,[Math]::Min([Math]::Min(4,$n),[Math]::Max(1,$Count))) }
+function Get-CompressionMemorySnapshot { try{$o=Get-CimInstance Win32_OperatingSystem -ErrorAction Stop;return [pscustomobject]@{Total=[int64]$o.TotalVisibleMemorySize*1KB;Available=[int64]$o.FreePhysicalMemory*1KB}}catch{return [pscustomobject]@{Total=0;Available=0}} }
+function Get-CompressionMemoryEstimate { param([hashtable]$M) switch([string]$M.Algorithm){'xz'{return [int64](1536MB)}'zstd'{return [int64](1024MB)}default{return [int64](256MB)}} }
+function Test-CompressionMemorySafe { param([hashtable]$M,[int64]$Active) $x=Get-CompressionMemorySnapshot;if($x.Total-le 0){return $true};$r=[Math]::Max([int64](2GB),[int64]($x.Total*0.20));return(($x.Available-$Active-(Get-CompressionMemoryEstimate $M))-ge$r) }
+function Convert-ToProcessArgumentString { param($Arguments) $q=@();foreach($a in @($Arguments)){$v=[string]$a;if($v-match'[\s"]'){$q+=('"'+$v+'"')}else{$q+=$v}};return($q-join' ') }
+function Start-TarAsync { param([string]$TarPath,$Args) $i=New-Object System.Diagnostics.ProcessStartInfo;$i.FileName=$TarPath;$i.Arguments=Convert-ToProcessArgumentString $Args;$i.UseShellExecute=$false;$i.CreateNoWindow=$true;$i.RedirectStandardOutput=$true;$i.RedirectStandardError=$true;$p=[System.Diagnostics.Process]::Start($i);try{$p.PriorityClass=[System.Diagnostics.ProcessPriorityClass]::BelowNormal}catch{};return [pscustomobject]@{P=$p;O=$p.StandardOutput.ReadToEndAsync();E=$p.StandardError.ReadToEndAsync()} }
 function Build-AndPublishBlocksParallel {
-    param([string]$TarPath,[hashtable]$Groups,[string]$BlocksDir,[string]$WorkRoot,[string]$StructureStage,[int]$StructureDirCount,[hashtable]$StoreMethod,[bool]$AllowGroupCopyFallback,[string]$OuterArchivePath,[int]$StartIndex=1,[string]$BlockSuffix='')
-    $script:lastGroupDiagnostics=@();$blocks=@();$index=[Math]::Max(1,$StartIndex)
-    if($StructureDirCount-gt 0){$id='{0:D6}'-f$index;$m=Get-TarMethodByName 'xz9';if($null-eq$m){$m=$StoreMethod};$bp=Join-Path $BlocksDir("$id`_structure$BlockSuffix$($m.Extension)");$reason='Directory structure only. Metadata-friendly XZ9 structure block.'
-        try{Create-BlockFromStageDirect $TarPath $StructureStage $bp $m}catch{if([string]$m.Name-ne[string]$StoreMethod.Name){Remove-Item $bp -Force -ErrorAction SilentlyContinue;$m=$StoreMethod;$bp=Join-Path $BlocksDir("$id`_structure$BlockSuffix$($m.Extension)");$reason='Directory structure only. STORE fallback used.';Create-BlockFromStageDirect $TarPath $StructureStage $bp $m}else{throw}}
-        Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $id 'structure' $bp $m $reason 0 $StructureDirCount 0;Remove-SmartTarTempFolder $StructureStage;$index++}
-    $pending=New-Object System.Collections.ArrayList;foreach($n in $Groups.Keys){$g=$Groups[$n];if([int]$g.FileCount-gt 0){[void]$pending.Add([pscustomobject]@{Id=('{0:D6}'-f$index);Group=$g});$index++}}
-    $limit=Get-CompressionWorkerLimit $pending.Count;$active=New-Object System.Collections.ArrayList;$done=New-Object System.Collections.ArrayList;$fallback=New-Object System.Collections.ArrayList
-    try{while($pending.Count-gt 0-or$active.Count-gt 0){
-        while($pending.Count-gt 0-and$active.Count-lt$limit){$next=$pending[0];$est=[int64]0;foreach($j in @($active)){$est+=[int64]$j.Estimate};if($active.Count-gt 0-and-not(Test-CompressionMemorySafe $next.Group.Method $est)){break};[void]$pending.RemoveAt(0)
-            try{Set-BusyStatus "Starting parallel block $($next.Id) $($next.Group.Name)...";$j=Start-ParallelGroupJob $TarPath $WorkRoot $BlocksDir $next.Id $next.Group $AllowGroupCopyFallback $BlockSuffix;[void]$active.Add($j)}catch{[void]$fallback.Add([pscustomobject]@{Group=$next.Group;Error=$_.Exception.Message})}}
-        $finished=@($active|Where-Object{$_.Process.HasExited}|Sort-Object Id);if($finished.Count-lt 1-and$active.Count-gt 0){Start-Sleep -Milliseconds 100;continue}
-        foreach($j in $finished){[void]$active.Remove($j);$r=Complete-ParallelGroupJob $j;if($r.Ok){[void]$done.Add($j);Add-GroupDiagnostic ([string]$j.Group.Name) 'parallel-group-stage-ok' 'Created in parallel worker pool.' ([int]$j.Group.FileCount) ([int64]$j.Group.Bytes)}else{[void]$fallback.Add([pscustomobject]@{Group=$j.Group;Error=$r.Error})}}
-        if($active.Count-eq 0-and$pending.Count-gt 0){continue}}
-        foreach($j in @($done|Sort-Object Id)){Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $j.Id ([string]$j.Group.Name) $j.Block $j.Group.Method ([string]$j.Group.Reason+' parallel group-stage block.') ([int]$j.Group.FileCount) 0 ([int64]$j.Group.Bytes)}
-        foreach($f in @($fallback)){$g=$f.Group;$chunks=Split-FileChunks -Files $g.Files;$part=1;foreach($ci in $chunks){$cf=@($ci.Files);if($cf.Count-lt 1){continue};$id='{0:D6}'-f$index;$index++;$sx=if($chunks.Count-gt 1){'_p{0:D3}'-f$part}else{''};$gn=([string]$g.Name)+$sx;$bp=Join-Path $BlocksDir("$id`_$gn$BlockSuffix$($g.Method.Extension)");$st=$null;try{$st=New-ChunkHardlinkStage $WorkRoot $cf;$rels=@($cf|ForEach-Object{[string]$_.Rel});Create-BlockFromStageList $TarPath $st $bp $g.Method $rels}finally{Remove-SmartTarTempFolder $st};$bytes=[int64]0;foreach($x in $cf){$bytes+=[int64]$x.Bytes};Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $id $gn $bp $g.Method ([string]$g.Reason+' sequential fallback after parallel failure: '+$f.Error) $cf.Count 0 $bytes;$part++}}
-        return $blocks
-    }finally{foreach($j in @($active)){try{if(-not$j.Process.HasExited){$j.Process.Kill()}}catch{};try{$j.Process.Dispose()}catch{};Remove-SmartTarTempFolder $j.Stage;Remove-Item -LiteralPath $j.Block -Force -ErrorAction SilentlyContinue}}
+ param([string]$TarPath,[hashtable]$Groups,[string]$BlocksDir,[string]$WorkRoot,[string]$StructureStage,[int]$StructureDirCount,[hashtable]$StoreMethod,[bool]$AllowGroupCopyFallback,[string]$OuterArchivePath,[int]$StartIndex=1,[string]$BlockSuffix='')
+ $blocks=@();$index=[Math]::Max(1,$StartIndex);$script:lastGroupDiagnostics=@()
+ if($StructureDirCount-gt 0){$id='{0:D6}'-f$index;$m=Get-TarMethodByName'xz9';if($null-eq$m){$m=$StoreMethod};$b=Join-Path $BlocksDir("$id`_structure$BlockSuffix$($m.Extension)");Create-BlockFromStageDirect $TarPath $StructureStage $b $m;Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $id 'structure' $b $m 'Directory structure block.' 0 $StructureDirCount 0;Remove-SmartTarTempFolder $StructureStage;$index++}
+ $pending=New-Object System.Collections.ArrayList;foreach($n in $Groups.Keys){$g=$Groups[$n];if($g.FileCount-gt 0){[void]$pending.Add([pscustomobject]@{Id=('{0:D6}'-f$index);G=$g});$index++}}
+ $limit=Get-CompressionWorkerLimit $pending.Count;$active=New-Object System.Collections.ArrayList;$done=New-Object System.Collections.ArrayList
+ try{while($pending.Count-gt 0-or$active.Count-gt 0){while($pending.Count-gt 0-and$active.Count-lt$limit){$x=$pending[0];$mem=[int64]0;foreach($j in @($active)){$mem+=$j.Mem};if($active.Count-gt 0-and-not(Test-CompressionMemorySafe $x.G.Method $mem)){break};[void]$pending.RemoveAt(0);$stage=New-GroupHardlinkStage $WorkRoot @($x.G.Files) $AllowGroupCopyFallback;[void](Normalize-XzStageIfNeeded $stage $x.G.Method);$bp=Join-Path $BlocksDir("$($x.Id)`_$($x.G.Name)$BlockSuffix$($x.G.Method.Extension)");$pd=Start-TarAsync $TarPath (@($x.G.Method.CreateArgs)+@($bp,'-C',$stage,'.'));[void]$active.Add([pscustomobject]@{Id=$x.Id;G=$x.G;Stage=$stage;Block=$bp;P=$pd.P;O=$pd.O;E=$pd.E;Mem=(Get-CompressionMemoryEstimate $x.G.Method)})}
+  $fin=@($active|Where-Object{$_.P.HasExited});if($fin.Count-eq 0-and$active.Count-gt 0){Start-Sleep -Milliseconds 100;continue};foreach($j in $fin){[void]$active.Remove($j);$j.P.WaitForExit();$ec=$j.P.ExitCode;$er=[string]$j.E.Result;try{$j.P.Dispose()}catch{};Remove-SmartTarTempFolder $j.Stage;if($ec-ne 0-or-not(Test-Path $j.Block)){throw "Parallel block failed: $($j.G.Name). $er"};[void]$done.Add($j)}}
+  foreach($j in @($done|Sort-Object Id)){Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $j.Id ([string]$j.G.Name) $j.Block $j.G.Method ([string]$j.G.Reason+' parallel block.') ([int]$j.G.FileCount) 0 ([int64]$j.G.Bytes)};return$blocks
+ }finally{foreach($j in @($active)){try{if(-not$j.P.HasExited){$j.P.Kill()}}catch{};Remove-SmartTarTempFolder $j.Stage}}
 }
 
 function Build-AndPublishBlocksSequential {
@@ -2465,26 +2342,11 @@ function Build-AndPublishBlocksSequential {
     return $blocks
 }
 
-
 function Test-PlannedDedupAliases {
-    $physical = @{}
-    foreach ($groupName in @($script:currentPlannedGroups.Keys)) {
-        foreach ($file in @($script:currentPlannedGroups[$groupName].Files)) {
-            $rel = (Convert-ToTarPath ([string]$file.Rel)).Trim('/').Trim()
-            if (-not (Test-Blank $rel)) { $physical[$rel.ToLowerInvariant()] = [int64]$file.Bytes }
-        }
-    }
-    foreach ($alias in @($script:planDedupAliases)) {
-        $path = (Convert-ToTarPath ([string]$alias.path)).Trim('/').Trim()
-        $target = (Convert-ToTarPath ([string]$alias.target)).Trim('/').Trim()
-        if (Test-Blank $path -or -not (Test-RelativePathSafe $path)) { throw "Unsafe planned dedup alias path: $path" }
-        if (Test-Blank $target -or -not (Test-RelativePathSafe $target)) { throw "Unsafe planned dedup target: $target" }
-        $key = $target.ToLowerInvariant()
-        if (-not $physical.ContainsKey($key)) { throw "Planned dedup target is not a physical block member: $target" }
-        if ([int64]$physical[$key] -ne [int64]$alias.bytes) {
-            throw "Planned dedup target size mismatch: $path -> $target. Alias=$($alias.bytes), target=$($physical[$key])."
-        }
-    }
+    param([hashtable]$Groups)
+    $physical=@{}
+    foreach($n in $Groups.Keys){foreach($f in @($Groups[$n].Files)){$rel=(Convert-ToTarPath([string]$f.Rel)).Trim('/').Trim();$key=$rel.ToLowerInvariant();if($physical.ContainsKey($key)){throw "Duplicate physical archive path in block plan: $rel"};$physical[$key]=[int64]$f.Bytes}}
+    foreach($a in @($script:planDedupAliases)){$p=(Convert-ToTarPath([string]$a.path)).Trim('/').Trim();$t=(Convert-ToTarPath([string]$a.target)).Trim('/').Trim();if(Test-Blank $t-or-not(Test-RelativePathSafe $t)){throw "Unsafe planned dedup target: $t"};$k=$t.ToLowerInvariant();if(-not$physical.ContainsKey($k)){throw "Planned dedup target is not a physical block member: $t"};if([int64]$physical[$k]-ne[int64]$a.bytes){throw "Planned dedup target size mismatch: $p -> $t. Alias=$($a.bytes), target=$($physical[$k])."}}
 }
 
 function Build-Manifest {
@@ -3724,7 +3586,7 @@ function Compress-SmartArchive {
     $blocksDir = Join-Path $work 'blocks'; $structureStage = Join-Path $work 'structure_stage'
     [System.IO.Directory]::CreateDirectory($blocksDir) | Out-Null; [System.IO.Directory]::CreateDirectory($structureStage) | Out-Null
     $outerTemp = ''; $published = $false
-    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceParent = Split-Path -Parent $Source; $sourceLeaf = Split-Path -Leaf $Source; if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }; if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; $script:currentPlannedGroups = $groups; Test-PlannedDedupAliases; Invoke-SmartArchiveMethodProbes $TarPath $work $Mode $groups $capabilities; if ($Mode -eq 'Solid' -and $groups.Contains('solid')) { $groups.solid.Method = Select-AutoSolidMethod $capabilities $profile $script:adaptiveStats; $groups.solid.Reason = 'Solid single-block method selected from content profile.' }; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating parallel STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksParallel $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; $dataLayout=Get-StarOuterTarLayout $outerTemp; Set-ManifestCanonicalOuterLayout $manifest ([int64]$dataLayout.EndOfEntriesOffset); Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; $finalLayout=Get-StarOuterTarLayout $outerTemp; if([int]$finalLayout.ManifestCount -ne 1 -or [string]$finalLayout.LastEntryPath -ne 'manifest.json'){throw 'New STAR canonical manifest layout validation failed.'}; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
+    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceParent = Split-Path -Parent $Source; $sourceLeaf = Split-Path -Leaf $Source; if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }; if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; Test-PlannedDedupAliases $groups; Invoke-SmartArchiveMethodProbes $TarPath $work $Mode $groups $capabilities; if ($Mode -eq 'Solid' -and $groups.Contains('solid')) { $groups.solid.Method = Select-AutoSolidMethod $capabilities $profile $script:adaptiveStats; $groups.solid.Reason = 'Solid single-block method selected from content profile.' }; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating parallel STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksParallel $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; $dataLayout=Get-StarOuterTarLayout $outerTemp; Set-ManifestCanonicalOuterLayout $manifest ([int64]$dataLayout.EndOfEntriesOffset); Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; $finalLayout=Get-StarOuterTarLayout $outerTemp; if([int]$finalLayout.ManifestCount -ne 1 -or [string]$finalLayout.LastEntryPath -ne 'manifest.json'){throw 'New STAR canonical manifest layout validation failed.'}; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
     finally { if (-not $published -and -not (Test-Blank $outerTemp) -and (Test-Path -LiteralPath $outerTemp)) { Remove-Item -LiteralPath $outerTemp -Force -ErrorAction SilentlyContinue }; Remove-SmartTarWorkAndRoot $work }
 }
 
