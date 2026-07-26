@@ -517,13 +517,78 @@ function Normalize-ArchiveSourcePath {
     param([string]$Path)
     if (Test-Blank $Path) { return '' }
 
-    $full = [System.IO.Path]::GetFullPath($Path)
+    # A bare Windows drive designator is drive-relative (for example E:),
+    # whereas SmartTAR always means the volume root. Canonicalize it before
+    # GetFullPath so the process current directory can never replace the root.
+    $candidate = ([string]$Path).Trim()
+    if ($candidate -match '^[A-Za-z]:[\/]?$') {
+        $candidate = $candidate.Substring(0, 2) + [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    $full = [System.IO.Path]::GetFullPath($candidate)
     $root = [System.IO.Path]::GetPathRoot($full)
 
-    if ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root)) {
+    if (-not (Test-Blank $root) -and
+        ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root))) {
         return $root
     }
     return (Trim-PathSeparators $full)
+}
+
+function Test-IsDriveRootPath {
+    param([string]$Path)
+    if (Test-Blank $Path) { return $false }
+    try {
+        $full = [System.IO.Path]::GetFullPath((Normalize-ArchiveSourcePath $Path))
+        $root = [System.IO.Path]::GetPathRoot($full)
+        return (-not (Test-Blank $root) -and
+            ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root)))
+    }
+    catch { return $false }
+}
+
+function Get-DriveArchiveRootName {
+    param([string]$DriveRoot)
+
+    $root = Normalize-ArchiveSourcePath $DriveRoot
+    $volumeLabel = ''
+    try {
+        $driveInfo = [System.IO.DriveInfo]::new($root)
+        if ($null -ne $driveInfo -and $driveInfo.IsReady) {
+            $volumeLabel = Convert-ToSafeArchiveFileNamePart ([string]$driveInfo.VolumeLabel)
+        }
+    }
+    catch { $volumeLabel = '' }
+
+    if (-not (Test-Blank $volumeLabel)) { return $volumeLabel }
+
+    $driveLetter = (Trim-PathSeparators $root).Replace(':', '')
+    $driveLetter = Convert-ToSafeArchiveFileNamePart $driveLetter
+    if (Test-Blank $driveLetter) { $driveLetter = 'Root' }
+    return ('Disk_' + $driveLetter)
+}
+
+function Get-ArchiveSourceContext {
+    param([string]$Source)
+
+    $normalized = Normalize-ArchiveSourcePath $Source
+    if (Test-IsDriveRootPath $normalized) {
+        return [pscustomobject]@{
+            BaseRoot = $normalized
+            SourceLeaf = (Get-DriveArchiveRootName $normalized)
+            IsDriveRoot = $true
+        }
+    }
+
+    $parent = Split-Path -Parent $normalized
+    $leaf = Split-Path -Leaf $normalized
+    if (Test-Blank $parent) { throw "Cannot determine the source parent path: $normalized" }
+    if (Test-Blank $leaf) { throw "Cannot determine the source archive name: $normalized" }
+    return [pscustomobject]@{
+        BaseRoot = $parent
+        SourceLeaf = $leaf
+        IsDriveRoot = $false
+    }
 }
 
 function Get-RelativePathFromBase {
@@ -3586,7 +3651,7 @@ function Compress-SmartArchive {
     $blocksDir = Join-Path $work 'blocks'; $structureStage = Join-Path $work 'structure_stage'
     [System.IO.Directory]::CreateDirectory($blocksDir) | Out-Null; [System.IO.Directory]::CreateDirectory($structureStage) | Out-Null
     $outerTemp = ''; $published = $false
-    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceParent = Split-Path -Parent $Source; $sourceLeaf = Split-Path -Leaf $Source; if (Test-Blank $sourceParent) { $sourceParent = (Get-Location).Path }; if (Test-Blank $sourceLeaf) { $sourceParent = $Source; $sourceLeaf = '.' }; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; Test-PlannedDedupAliases $groups; Invoke-SmartArchiveMethodProbes $TarPath $work $Mode $groups $capabilities; if ($Mode -eq 'Solid' -and $groups.Contains('solid')) { $groups.solid.Method = Select-AutoSolidMethod $capabilities $profile $script:adaptiveStats; $groups.solid.Reason = 'Solid single-block method selected from content profile.' }; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating parallel STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksParallel $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; $dataLayout=Get-StarOuterTarLayout $outerTemp; Set-ManifestCanonicalOuterLayout $manifest ([int64]$dataLayout.EndOfEntriesOffset); Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; $finalLayout=Get-StarOuterTarLayout $outerTemp; if([int]$finalLayout.ManifestCount -ne 1 -or [string]$finalLayout.LastEntryPath -ne 'manifest.json'){throw 'New STAR canonical manifest layout validation failed.'}; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
+    try { Set-BusyStatus 'Checking TAR capabilities...'; $capabilities = Test-TarCapabilities $TarPath $work; if (-not $capabilities.store) { throw 'No usable tar store method.' }; $sourceItem = Get-Item -LiteralPath $Source -Force; $sourceContext = Get-ArchiveSourceContext $Source; $sourceParent = [string]$sourceContext.BaseRoot; $sourceLeaf = [string]$sourceContext.SourceLeaf; Set-BusyStatus 'Analyzing source...'; $profile = Get-SourceProfile $sourceItem $Source $sourceParent; $profileName = Get-CompressionProfileDisplayName $Mode (Get-CompressionPreferenceForMode $Mode); Set-BusyStatus "Selected profile: $profileName"; $groups = New-ArchiveGroups $Mode $capabilities $profile; Initialize-SmartTarPlanningArtifacts $work; Stage-FilesPlan $sourceItem $Source $sourceParent $Mode $groups; Test-PlannedDedupAliases $groups; Invoke-SmartArchiveMethodProbes $TarPath $work $Mode $groups $capabilities; if ($Mode -eq 'Solid' -and $groups.Contains('solid')) { $groups.solid.Method = Select-AutoSolidMethod $capabilities $profile $script:adaptiveStats; $groups.solid.Reason = 'Solid single-block method selected from content profile.' }; $dirCount = Create-StructureStage $sourceItem $Source $sourceParent $structureStage; $storeMethod = Select-StoreMethod $capabilities; Set-BusyStatus "Creating parallel STAR archive: $profileName..."; $outerTemp = New-StarOuterTempArchive $Destination; $blocks = Build-AndPublishBlocksParallel $TarPath $groups $blocksDir $work $structureStage $dirCount $storeMethod $allowGroupCopyFallback $outerTemp; if ($blocks.Count -lt 1) { throw 'No blocks were created.' }; $manifest = Build-Manifest $Source $sourceItem $sourceLeaf $Mode $capabilities $profile $blocks; $dataLayout=Get-StarOuterTarLayout $outerTemp; Set-ManifestCanonicalOuterLayout $manifest ([int64]$dataLayout.EndOfEntriesOffset); Write-Manifest (Join-Path $work 'manifest.json') $manifest; Set-BusyStatus "Finalizing STAR archive: $profileName..."; Add-StarOuterEntry $TarPath $outerTemp $work 'manifest.json' 'Outer .star manifest append failed.'; $finalLayout=Get-StarOuterTarLayout $outerTemp; if([int]$finalLayout.ManifestCount -ne 1 -or [string]$finalLayout.LastEntryPath -ne 'manifest.json'){throw 'New STAR canonical manifest layout validation failed.'}; Complete-StarOuterArchive $outerTemp $Destination; $published = $true }
     finally { if (-not $published -and -not (Test-Blank $outerTemp) -and (Test-Path -LiteralPath $outerTemp)) { Remove-Item -LiteralPath $outerTemp -Force -ErrorAction SilentlyContinue }; Remove-SmartTarWorkAndRoot $work }
 }
 
@@ -3708,24 +3773,7 @@ function Get-DefaultArchiveBaseName {
         $root = [System.IO.Path]::GetPathRoot($full)
 
         if (-not (Test-Blank $root) -and ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root))) {
-            $driveLetter = (Trim-PathSeparators $root)
-            $driveLetter = $driveLetter.Replace(':', '')
-            $driveLetter = Convert-ToSafeArchiveFileNamePart $driveLetter
-
-            $volumeLabel = ''
-            try {
-                $driveInfo = [System.IO.DriveInfo]::new($root)
-                if ($null -ne $driveInfo -and $driveInfo.IsReady) {
-                    $volumeLabel = Convert-ToSafeArchiveFileNamePart ([string]$driveInfo.VolumeLabel)
-                }
-            }
-            catch {
-                $volumeLabel = ''
-            }
-
-            if (-not (Test-Blank $volumeLabel)) { return $volumeLabel }
-            if (Test-Blank $driveLetter) { $driveLetter = 'root' }
-            return ('Drive_' + $driveLetter)
+            return (Get-DriveArchiveRootName $root)
         }
     }
     catch {
