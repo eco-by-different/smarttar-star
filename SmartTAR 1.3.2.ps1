@@ -144,6 +144,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 public sealed class SmartTarNativeAnalysisResult
 {
@@ -194,10 +195,21 @@ public static class SmartTarNativeAnalyzer
 
             byte[] sample = ReadSample(path, fileSize, maxBytes);
             result.SampleBytes = sample.LongLength;
-            result.ZeroBytes = CountZero(sample);
-            result.UniqueBytes = CountUnique(sample);
+            long zeroBytes;
+            int uniqueBytes;
+            double entropy;
+            double textScore;
+            AnalyzeSample(
+                sample,
+                out zeroBytes,
+                out uniqueBytes,
+                out entropy,
+                out textScore
+            );
+            result.ZeroBytes = zeroBytes;
+            result.UniqueBytes = uniqueBytes;
+            result.Entropy = entropy;
             result.UniqueAvailable = sample.Length > 0;
-            result.Entropy = GetEntropy(sample);
             result.EntropyAvailable = sample.Length > 0;
 
             string ext = Path.GetExtension(path);
@@ -217,9 +229,6 @@ public static class SmartTarNativeAnalyzer
                 return result;
             }
 
-            double textScore = GetTextScore(sample);
-            double entropy = result.Entropy;
-
             if (textScore >= 0.80 && entropy < 7.90)
                 result.Decision = "text";
             else if (entropy >= 7.92)
@@ -237,6 +246,33 @@ public static class SmartTarNativeAnalyzer
             result.Decision = "unknown";
             return result;
         }
+    }
+
+    public static SmartTarNativeAnalysisResult[] AnalyzeFiles(
+        string[] paths,
+        long[] fileSizes,
+        int maxBytes,
+        int maxParallelism)
+    {
+        if (paths == null)
+            throw new ArgumentNullException("paths");
+        if (fileSizes == null)
+            throw new ArgumentNullException("fileSizes");
+        if (paths.Length != fileSizes.Length)
+            throw new ArgumentException("Path and size arrays must have the same length.");
+
+        SmartTarNativeAnalysisResult[] results =
+            new SmartTarNativeAnalysisResult[paths.Length];
+        if (paths.Length == 0)
+            return results;
+
+        ParallelOptions options = new ParallelOptions();
+        options.MaxDegreeOfParallelism = Math.Max(1, maxParallelism);
+        Parallel.For(0, paths.Length, options, delegate(int index)
+        {
+            results[index] = AnalyzeFile(paths[index], fileSizes[index], maxBytes);
+        });
+        return results;
     }
 
     private static byte[] ReadSample(string path, long fileSize, int maxBytes)
@@ -281,71 +317,34 @@ public static class SmartTarNativeAnalyzer
         }
     }
 
-    private static long CountZero(byte[] bytes)
+    private static void AnalyzeSample(
+        byte[] bytes,
+        out long zeroBytes,
+        out int uniqueBytes,
+        out double entropy,
+        out double textScore)
     {
-        long count = 0;
-        if (bytes != null)
-            for (int i = 0; i < bytes.Length; i++)
-                if (bytes[i] == 0) count++;
-        return count;
-    }
-
-    private static int CountUnique(byte[] bytes)
-    {
+        zeroBytes = 0;
+        uniqueBytes = 0;
+        entropy = 0.0;
+        textScore = 0.0;
         if (bytes == null || bytes.Length == 0)
-            return 0;
-
-        bool[] seen = new bool[256];
-        int count = 0;
-        for (int i = 0; i < bytes.Length; i++)
-        {
-            int index = bytes[i];
-            if (!seen[index])
-            {
-                seen[index] = true;
-                count++;
-            }
-        }
-        return count;
-    }
-
-    private static double GetEntropy(byte[] bytes)
-    {
-        if (bytes == null || bytes.Length == 0)
-            return 0.0;
+            return;
 
         int[] counts = new int[256];
-        for (int i = 0; i < bytes.Length; i++)
-            counts[bytes[i]]++;
-
-        double length = (double)bytes.Length;
-        double entropy = 0.0;
-        for (int i = 0; i < 256; i++)
-        {
-            if (counts[i] > 0)
-            {
-                double p = (double)counts[i] / length;
-                entropy -= p * (Math.Log(p) / Math.Log(2.0));
-            }
-        }
-        return entropy;
-    }
-
-    private static double GetTextScore(byte[] bytes)
-    {
-        if (bytes == null || bytes.Length == 0)
-            return 0.0;
-
         int printable = 0;
         int control = 0;
-        int zero = 0;
 
         for (int i = 0; i < bytes.Length; i++)
         {
             byte b = bytes[i];
+            if (counts[b] == 0)
+                uniqueBytes++;
+            counts[b]++;
+
             if (b == 0)
             {
-                zero++;
+                zeroBytes++;
                 continue;
             }
 
@@ -356,7 +355,15 @@ public static class SmartTarNativeAnalyzer
         }
 
         double length = (double)bytes.Length;
-        return ((double)printable / length) - (((double)zero / length) * 4.0) - (((double)control / length) * 2.0);
+        for (int i = 0; i < 256; i++)
+        {
+            if (counts[i] > 0)
+            {
+                double p = (double)counts[i] / length;
+                entropy -= p * (Math.Log(p) / Math.Log(2.0));
+            }
+        }
+        textScore = ((double)printable / length) - (((double)zeroBytes / length) * 4.0) - (((double)control / length) * 2.0);
     }
 
     private static bool StartsWith(byte[] bytes, byte[] signature)
@@ -1726,64 +1733,36 @@ function Invoke-ParallelAdaptiveAnalysis {
     if ($MaxParallel -lt 1) { $MaxParallel = 1 }
     if ($MaxParallel -gt $items.Count) { $MaxParallel = $items.Count }
 
+    $map = @{}
     if (-not ($script:UseNativeAnalyzer -and ('SmartTarNativeAnalyzer' -as [type]))) {
-        $map = @{}
         foreach ($item in $items) {
             $map[[string]$item.FullName] = Invoke-NativeAdaptiveAnalysis $item
         }
         return $map
     }
 
-    $worker = {
-        param([string]$Path, [int64]$FileSize, [int]$MaxBytes)
-        try {
-            return [SmartTarNativeAnalyzer]::AnalyzeFile($Path, $FileSize, $MaxBytes)
-        }
-        catch {
-            return [pscustomobject]@{
-                FullName = [string]$Path
-                Decision = 'unknown'
-                Error = $true
-                SampleBytes = [int64]0
-                ZeroBytes = [int64]0
-                EntropyAvailable = $false
-                Entropy = [double]0.0
-                UniqueAvailable = $false
-                UniqueBytes = [int]0
-            }
-        }
+    $paths = New-Object 'System.String[]' $items.Count
+    $sizes = New-Object 'System.Int64[]' $items.Count
+    for ($i = 0; $i -lt $items.Count; $i++) {
+        $paths[$i] = [string]$items[$i].FullName
+        $sizes[$i] = [int64]$items[$i].Length
     }
 
-    $pool = [runspacefactory]::CreateRunspacePool(1, $MaxParallel)
-    $pool.ApartmentState = 'MTA'
-    $pool.Open()
-    $jobs = New-Object System.Collections.ArrayList
     try {
-        foreach ($item in $items) {
-            $ps = [powershell]::Create()
-            $ps.RunspacePool = $pool
-            [void]$ps.AddScript($worker).AddArgument([string]$item.FullName).AddArgument([int64]$item.Length).AddArgument([int]$SampleBytes)
-            $handle = $ps.BeginInvoke()
-            [void]$jobs.Add([pscustomobject]@{ PowerShell=$ps; Handle=$handle; FullName=[string]$item.FullName })
-        }
-
-        $map = @{}
-        foreach ($job in $jobs) {
-            try {
-                $result = $job.PowerShell.EndInvoke($job.Handle)
-                if ($result -and $result.Count -gt 0) { $map[[string]$job.FullName] = $result[0] }
-            }
-            catch {
-                $map[[string]$job.FullName] = [pscustomobject]@{ FullName=[string]$job.FullName; Decision='unknown'; Error=$true; SampleBytes=0; ZeroBytes=0; EntropyAvailable=$false; Entropy=0.0; UniqueAvailable=$false; UniqueBytes=0 }
-            }
-            finally { $job.PowerShell.Dispose() }
+        $results = [SmartTarNativeAnalyzer]::AnalyzeFiles(
+            $paths, $sizes, [int]$SampleBytes, [int]$MaxParallel
+        )
+        for ($i = 0; $i -lt $items.Count; $i++) {
+            $map[$paths[$i]] = $results[$i]
         }
         return $map
     }
-    finally {
-        foreach ($job in $jobs) { try { $job.PowerShell.Dispose() } catch {} }
-        $pool.Close()
-        $pool.Dispose()
+    catch {
+        $script:UseNativeAnalyzer = $false
+        foreach ($item in $items) {
+            $map[[string]$item.FullName] = Invoke-NativeAdaptiveAnalysis $item
+        }
+        return $map
     }
 }
 
@@ -2484,15 +2463,7 @@ function Get-SmartArchivePlannedExtractionTarget {
         $rootName = Get-ArchiveRootName $manifest $ArchivePath
         $sourceType = [string]$manifest.sourceType
 
-        if ($sourceType -eq 'Folder' -and -not (Test-Blank $rootName)) {
-            return [pscustomobject]@{
-                SourceType = $sourceType
-                SourceName = [string]$rootName
-                TargetPath = (Join-Path $DestinationParent $rootName)
-            }
-        }
-
-        if ($sourceType -eq 'File' -and -not (Test-Blank $rootName) -and $rootName -ne '.') {
+        if (-not (Test-Blank $rootName) -and $rootName -ne '.') {
             return [pscustomobject]@{
                 SourceType = $sourceType
                 SourceName = [string]$rootName
