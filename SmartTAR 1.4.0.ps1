@@ -516,31 +516,23 @@ function Convert-ToSafeArchiveFileNamePart {
 function Normalize-ArchiveSourcePath {
     param([string]$Path)
     if (Test-Blank $Path) { return '' }
-
     $candidate = ([string]$Path).Trim()
     if ($candidate -match '^[A-Za-z]:[\/]?$') {
         $candidate = $candidate.Substring(0, 2) + [System.IO.Path]::DirectorySeparatorChar
     }
-
     $full = [System.IO.Path]::GetFullPath($candidate)
     $root = [System.IO.Path]::GetPathRoot($full)
-    if (-not (Test-Blank $root) -and
-        ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root))) {
-        return $root
-    }
+    if (-not (Test-Blank $root) -and ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root))) { return $root }
     return (Trim-PathSeparators $full)
 }
 
 function Test-IsDriveRootPath {
     param([string]$Path)
-    if (Test-Blank $Path) { return $false }
     try {
         $full = [System.IO.Path]::GetFullPath((Normalize-ArchiveSourcePath $Path))
         $root = [System.IO.Path]::GetPathRoot($full)
-        return (-not (Test-Blank $root) -and
-            ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root)))
-    }
-    catch { return $false }
+        return (-not (Test-Blank $root) -and ((Trim-PathSeparators $full) -ieq (Trim-PathSeparators $root)))
+    } catch { return $false }
 }
 
 function Get-DriveArchiveRootName {
@@ -548,15 +540,11 @@ function Get-DriveArchiveRootName {
     $root = Normalize-ArchiveSourcePath $DriveRoot
     $label = ''
     try {
-        $driveInfo = [System.IO.DriveInfo]::new($root)
-        if ($driveInfo -and $driveInfo.IsReady) {
-            $label = Convert-ToSafeArchiveFileNamePart ([string]$driveInfo.VolumeLabel)
-        }
-    }
-    catch { $label = '' }
+        $di = [System.IO.DriveInfo]::new($root)
+        if ($di -and $di.IsReady) { $label = Convert-ToSafeArchiveFileNamePart ([string]$di.VolumeLabel) }
+    } catch { $label = '' }
     if (-not (Test-Blank $label)) { return $label }
-
-    $letter = Convert-ToSafeArchiveFileNamePart ((Trim-PathSeparators $root).Replace(':', ''))
+    $letter = Convert-ToSafeArchiveFileNamePart ((Trim-PathSeparators $root).Replace(':',''))
     if (Test-Blank $letter) { $letter = 'Root' }
     return ('Disk_' + $letter)
 }
@@ -565,56 +553,31 @@ function Get-ArchiveSourceContext {
     param([string]$Source)
     $normalized = Normalize-ArchiveSourcePath $Source
     if (Test-IsDriveRootPath $normalized) {
-        return [pscustomobject]@{
-            BaseRoot = $normalized
-            SourceLeaf = (Get-DriveArchiveRootName $normalized)
-            ArchiveRootPrefix = (Get-DriveArchiveRootName $normalized)
-            IsDriveRoot = $true
-        }
+        $name = Get-DriveArchiveRootName $normalized
+        return [pscustomobject]@{ BaseRoot=$normalized; SourceLeaf=$name; ArchiveRootPrefix=$name; IsDriveRoot=$true }
     }
-
     $parent = Split-Path -Parent $normalized
     $leaf = Split-Path -Leaf $normalized
-    if (Test-Blank $parent) { throw "Cannot determine source parent: $normalized" }
-    if (Test-Blank $leaf) { throw "Cannot determine source archive name: $normalized" }
-    return [pscustomobject]@{
-        BaseRoot = $parent
-        SourceLeaf = $leaf
-        ArchiveRootPrefix = ''
-        IsDriveRoot = $false
-    }
+    if (Test-Blank $parent -or Test-Blank $leaf) { throw "Cannot determine source context: $normalized" }
+    return [pscustomobject]@{ BaseRoot=$parent; SourceLeaf=$leaf; ArchiveRootPrefix=''; IsDriveRoot=$false }
 }
 
 function Get-RelativePathFromBase {
     param([string]$BasePath, [string]$FullPath)
-
-    if (Test-Blank $BasePath -or Test-Blank $FullPath) {
-        throw 'Cannot create a relative path from an empty path.'
-    }
-
+    if (Test-Blank $BasePath -or Test-Blank $FullPath) { throw 'Cannot create a relative path from an empty path.' }
     $baseFull = Trim-PathSeparators ([System.IO.Path]::GetFullPath($BasePath))
     $pathFull = [System.IO.Path]::GetFullPath($FullPath)
     $prefix = $baseFull + [System.IO.Path]::DirectorySeparatorChar
     $archivePrefix = [string]$script:sourceArchiveRootPrefix
-
-    if ($pathFull.Equals($baseFull, [System.StringComparison]::OrdinalIgnoreCase) -or
-        ((Trim-PathSeparators $pathFull) -ieq (Trim-PathSeparators $baseFull))) {
+    if ((Trim-PathSeparators $pathFull) -ieq (Trim-PathSeparators $baseFull)) {
         if (-not (Test-Blank $archivePrefix)) { return $archivePrefix }
         return '.'
     }
-
-    if ($pathFull.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($pathFull.StartsWith($prefix,[System.StringComparison]::OrdinalIgnoreCase)) {
         $relative = $pathFull.Substring($prefix.Length)
-        if (Test-Blank $relative) {
-            if (-not (Test-Blank $archivePrefix)) { return $archivePrefix }
-            throw "Relative path is empty. Base='$baseFull', Path='$pathFull'."
-        }
-        if (-not (Test-Blank $archivePrefix)) {
-            return (Join-Path $archivePrefix $relative)
-        }
+        if (-not (Test-Blank $archivePrefix)) { return (Join-Path $archivePrefix $relative) }
         return $relative
     }
-
     throw "Source item is outside the selected base path. Base='$baseFull', Path='$pathFull'."
 }
 
@@ -2385,7 +2348,7 @@ function Start-TarAsync { param([string]$TarPath,$Args) $i=New-Object System.Dia
 function Build-AndPublishBlocksParallel {
  param([string]$TarPath,[hashtable]$Groups,[string]$BlocksDir,[string]$WorkRoot,[string]$StructureStage,[int]$StructureDirCount,[hashtable]$StoreMethod,[bool]$AllowGroupCopyFallback,[string]$OuterArchivePath,[int]$StartIndex=1,[string]$BlockSuffix='')
  $blocks=@();$index=[Math]::Max(1,$StartIndex);$script:lastGroupDiagnostics=@()
- if($StructureDirCount-gt 0){$id='{0:D6}'-f$index;$m=Get-TarMethodByName'xz9';if($null-eq$m){$m=$StoreMethod};$b=Join-Path $BlocksDir("$id`_structure$BlockSuffix$($m.Extension)");Create-BlockFromStageDirect $TarPath $StructureStage $b $m;Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $id 'structure' $b $m 'Directory structure block.' 0 $StructureDirCount 0;Remove-SmartTarTempFolder $StructureStage;$index++}
+ if($StructureDirCount-gt 0){$id='{0:D6}'-f$index;$m=Get-TarMethodByName 'xz9';if($null-eq$m){$m=$StoreMethod};$b=Join-Path $BlocksDir("$id`_structure$BlockSuffix$($m.Extension)");Create-BlockFromStageDirect $TarPath $StructureStage $b $m;Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $id 'structure' $b $m 'Directory structure block.' 0 $StructureDirCount 0;Remove-SmartTarTempFolder $StructureStage;$index++}
  $pending=New-Object System.Collections.ArrayList;foreach($n in $Groups.Keys){$g=$Groups[$n];if($g.FileCount-gt 0){[void]$pending.Add([pscustomobject]@{Id=('{0:D6}'-f$index);G=$g});$index++}}
  $limit=Get-CompressionWorkerLimit $pending.Count;$active=New-Object System.Collections.ArrayList;$done=New-Object System.Collections.ArrayList
  try{while($pending.Count-gt 0-or$active.Count-gt 0){while($pending.Count-gt 0-and$active.Count-lt$limit){$x=$pending[0];$mem=[int64]0;foreach($j in @($active)){$mem+=$j.Mem};if($active.Count-gt 0-and-not(Test-CompressionMemorySafe $x.G.Method $mem)){break};[void]$pending.RemoveAt(0);$stage=New-GroupHardlinkStage $WorkRoot @($x.G.Files) $AllowGroupCopyFallback;[void](Normalize-XzStageIfNeeded $stage $x.G.Method);$bp=Join-Path $BlocksDir("$($x.Id)`_$($x.G.Name)$BlockSuffix$($x.G.Method.Extension)");$pd=Start-TarAsync $TarPath (@($x.G.Method.CreateArgs)+@($bp,'-C',$stage,'.'));[void]$active.Add([pscustomobject]@{Id=$x.Id;G=$x.G;Stage=$stage;Block=$bp;P=$pd.P;O=$pd.O;E=$pd.E;Mem=(Get-CompressionMemoryEstimate $x.G.Method)})}
