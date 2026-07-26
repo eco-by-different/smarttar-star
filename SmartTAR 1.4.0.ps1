@@ -2387,7 +2387,18 @@ function Test-CompressionMemorySafe {
 }
 function Convert-ToProcessArgumentString {
     param($Arguments)
-    return ((foreach($a in @($Arguments)){$v=[string]$a;if($v -match '[\s"]'){'"'+$v+'"'}else{$v}})-join' ')
+
+    $quoted = @()
+    foreach ($argument in @($Arguments)) {
+        $value = [string]$argument
+        if ($value -match '[\s"]') {
+            $quoted += ('"' + $value + '"')
+        }
+        else {
+            $quoted += $value
+        }
+    }
+    return ($quoted -join ' ')
 }
 function Start-TarAsync {
     param([string]$TarPath,$Arguments)
