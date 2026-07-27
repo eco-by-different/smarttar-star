@@ -1005,8 +1005,30 @@ if (-not (Test-Path -LiteralPath $tarPath)) {
 
 function Write-WorkerStatusFile {
     param([string]$Path, [string]$Text)
-    if (-not (Test-Blank $Path)) {
-        try { $Text | Set-Content -LiteralPath $Path -Encoding UTF8 } catch {}
+
+    if (Test-Blank $Path) { return }
+
+    $directory = Split-Path -Parent $Path
+    if (-not (Test-Blank $directory)) {
+        [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+    }
+
+    $tempPath = $Path + '.writing.' + [guid]::NewGuid().ToString('N')
+    try {
+        $Text | Set-Content -LiteralPath $tempPath -Encoding UTF8 -ErrorAction Stop
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+                Move-Item -LiteralPath $tempPath -Destination $Path -Force -ErrorAction Stop
+                return
+            }
+            catch {
+                if ($attempt -lt 5) { Start-Sleep -Milliseconds 40 }
+            }
+        }
+    }
+    catch {}
+    finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -2339,10 +2361,31 @@ function Complete-StarOuterArchive {
     Move-Item -LiteralPath $TempArchive -Destination $Destination -Force
 }
 
-function Get-CompressionWorkerLimit { param([int]$Count) $n=[Math]::Max(1,[int][Math]::Floor([Environment]::ProcessorCount*0.5));return [Math]::Max(1,[Math]::Min([Math]::Min(4,$n),[Math]::Max(1,$Count))) }
-function Get-CompressionMemorySnapshot { try{$o=Get-CimInstance Win32_OperatingSystem -ErrorAction Stop;return [pscustomobject]@{Total=[int64]$o.TotalVisibleMemorySize*1KB;Available=[int64]$o.FreePhysicalMemory*1KB}}catch{return [pscustomobject]@{Total=0;Available=0}} }
-function Get-CompressionMemoryEstimate { param([hashtable]$M) switch([string]$M.Algorithm){'xz'{return [int64](1536MB)}'zstd'{return [int64](1024MB)}default{return [int64](256MB)}} }
-function Test-CompressionMemorySafe { param([hashtable]$M,[int64]$Active) $x=Get-CompressionMemorySnapshot;if($x.Total-le 0){return $true};$r=[Math]::Max([int64](2GB),[int64]($x.Total*0.20));return(($x.Available-$Active-(Get-CompressionMemoryEstimate $M))-ge$r) }
+function Get-CompressionWorkerLimit {
+    param([int]$Count)
+
+    # SmartTAR intentionally uses two compression streams. All group stages are
+    # prepared before scheduling, so text/XZ and binary/XZ can start back-to-back.
+    return [Math]::Max(1, [Math]::Min(2, [Math]::Max(1, $Count)))
+}
+
+function Get-CompressionQueuePriority {
+    param($Group)
+
+    $name = ([string]$Group.Name).ToLowerInvariant()
+    $algorithm = ([string]$Group.Method.Algorithm).ToLowerInvariant()
+    $bytes = [int64]$Group.Bytes
+
+    # Empirical order from the large ISO test. text/XZ was the slowest workload
+    # per source byte; binary/XZ was the second long-running workload.
+    if ($name -eq 'text' -and $algorithm -eq 'xz') { return 0 }
+    if ($name -eq 'binary' -and $algorithm -eq 'xz') { return 10 }
+    if ($algorithm -eq 'zstd') { return 20 }
+    if ($algorithm -eq 'xz' -and $bytes -ge 1MB) { return 30 }
+    if ($algorithm -eq 'store') { return 40 }
+    if ($algorithm -eq 'xz') { return 50 }
+    return 60
+}
 function Convert-ToWindowsProcessArgument {
     param([string]$Value)
     if ($null -eq $Value -or $Value.Length -eq 0) { return '""' }
@@ -2376,33 +2419,200 @@ function Convert-ToProcessArgumentString {
 }
 function Start-TarAsync {
     param([string]$TarPath, $TarArguments)
+
     $argumentString = Convert-ToProcessArgumentString $TarArguments
-    $i = New-Object System.Diagnostics.ProcessStartInfo
-    $i.FileName = $TarPath
-    $i.Arguments = $argumentString
-    $i.UseShellExecute = $false
-    $i.CreateNoWindow = $true
-    $i.RedirectStandardOutput = $true
-    $i.RedirectStandardError = $true
-    $p = [System.Diagnostics.Process]::Start($i)
-    try { $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $TarPath
+    $startInfo.Arguments = $argumentString
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+
+    # tar create writes no useful standard output. Redirecting and asynchronously
+    # reading both streams caused disposed-stream errors in Windows PowerShell 5.1.
+    # Keep stdout attached and capture only stderr, which contains diagnostics.
+    $startInfo.RedirectStandardOutput = $false
+    $startInfo.RedirectStandardError = $true
+
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) {
+        throw "Unable to start TAR process. Arguments: $argumentString"
+    }
+
+    try { $process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
+
+    $errorTask = $process.StandardError.ReadToEndAsync()
     return [pscustomobject]@{
-        P = $p
-        O = $p.StandardOutput.ReadToEndAsync()
-        E = $p.StandardError.ReadToEndAsync()
+        P = $process
+        E = $errorTask
         Arguments = $argumentString
     }
 }
 function Build-AndPublishBlocksParallel {
- param([string]$TarPath,[hashtable]$Groups,[string]$BlocksDir,[string]$WorkRoot,[string]$StructureStage,[int]$StructureDirCount,[hashtable]$StoreMethod,[bool]$AllowGroupCopyFallback,[string]$OuterArchivePath,[int]$StartIndex=1,[string]$BlockSuffix='')
- $blocks=@();$index=[Math]::Max(1,$StartIndex);$script:lastGroupDiagnostics=@()
- if($StructureDirCount-gt 0){$id='{0:D6}'-f$index;$m=Get-TarMethodByName 'xz9';if($null-eq$m){$m=$StoreMethod};$b=Join-Path $BlocksDir("$id`_structure$BlockSuffix$($m.Extension)");Create-BlockFromStageDirect $TarPath $StructureStage $b $m;Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $id 'structure' $b $m 'Directory structure block.' 0 $StructureDirCount 0;Remove-SmartTarTempFolder $StructureStage;$index++}
- $pending=New-Object System.Collections.ArrayList;foreach($n in $Groups.Keys){$g=$Groups[$n];if($g.FileCount-gt 0){[void]$pending.Add([pscustomobject]@{Id=('{0:D6}'-f$index);G=$g});$index++}}
- $limit=Get-CompressionWorkerLimit $pending.Count;$active=New-Object System.Collections.ArrayList;$done=New-Object System.Collections.ArrayList
- try{while($pending.Count-gt 0-or$active.Count-gt 0){while($pending.Count-gt 0-and$active.Count-lt$limit){$x=$pending[0];$mem=[int64]0;foreach($j in @($active)){$mem+=$j.Mem};if($active.Count-gt 0-and-not(Test-CompressionMemorySafe $x.G.Method $mem)){break};[void]$pending.RemoveAt(0);$stage=New-GroupHardlinkStage $WorkRoot @($x.G.Files) $AllowGroupCopyFallback;[void](Normalize-XzStageIfNeeded $stage $x.G.Method);$bp=Join-Path $BlocksDir("$($x.Id)`_$($x.G.Name)$BlockSuffix$($x.G.Method.Extension)");$pd=Start-TarAsync $TarPath (@($x.G.Method.CreateArgs)+@($bp,'-C',$stage,'.'));[void]$active.Add([pscustomobject]@{Id=$x.Id;G=$x.G;Stage=$stage;Block=$bp;P=$pd.P;O=$pd.O;E=$pd.E;Args=$pd.Arguments;Mem=(Get-CompressionMemoryEstimate $x.G.Method)})}
-  $fin=@($active|Where-Object{$_.P.HasExited});if($fin.Count-eq 0-and$active.Count-gt 0){Start-Sleep -Milliseconds 100;continue};foreach($j in $fin){[void]$active.Remove($j);$j.P.WaitForExit();$ec=$j.P.ExitCode;$er=[string]$j.E.Result;try{$j.P.Dispose()}catch{};Remove-SmartTarTempFolder $j.Stage;if($ec-ne 0-or-not(Test-Path $j.Block)){throw "Parallel block failed: $($j.G.Name). Arguments: $($j.Args) Error: $er"};[void]$done.Add($j)}}
-  foreach($j in @($done|Sort-Object Id)){Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $j.Id ([string]$j.G.Name) $j.Block $j.G.Method ([string]$j.G.Reason+' parallel block.') ([int]$j.G.FileCount) 0 ([int64]$j.G.Bytes)}; return $blocks
- }finally{foreach($j in @($active)){try{if(-not$j.P.HasExited){$j.P.Kill()}}catch{};Remove-SmartTarTempFolder $j.Stage}}
+    param(
+        [string]$TarPath,
+        [hashtable]$Groups,
+        [string]$BlocksDir,
+        [string]$WorkRoot,
+        [string]$StructureStage,
+        [int]$StructureDirCount,
+        [hashtable]$StoreMethod,
+        [bool]$AllowGroupCopyFallback,
+        [string]$OuterArchivePath,
+        [int]$StartIndex = 1,
+        [string]$BlockSuffix = ''
+    )
+
+    $blocks = @()
+    $index = [Math]::Max(1, $StartIndex)
+    $script:lastGroupDiagnostics = @()
+
+    if ($StructureDirCount -gt 0) {
+        $id = '{0:D6}' -f $index
+        $method = Get-TarMethodByName 'xz9'
+        if ($null -eq $method) { $method = $StoreMethod }
+        $blockPath = Join-Path $BlocksDir ("$id`_structure$BlockSuffix$($method.Extension)")
+
+        Set-BusyStatus "Creating structure block $id..."
+        Create-BlockFromStageDirect $TarPath $StructureStage $blockPath $method
+        Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $id 'structure' $blockPath $method 'Directory structure block.' 0 $StructureDirCount 0
+        Remove-SmartTarTempFolder $StructureStage
+        $index++
+    }
+
+    # Assign stable IDs independently from runtime scheduling priority.
+    $jobs = New-Object System.Collections.ArrayList
+    foreach ($groupName in $Groups.Keys) {
+        $group = $Groups[$groupName]
+        if ([int]$group.FileCount -le 0) { continue }
+
+        [void]$jobs.Add([pscustomobject]@{
+            Id       = ('{0:D6}' -f $index)
+            Group    = $group
+            Priority = (Get-CompressionQueuePriority $group)
+            Bytes    = [int64]$group.Bytes
+            Name     = [string]$group.Name
+        })
+        $index++
+    }
+
+    $prepared = New-Object System.Collections.ArrayList
+    $active = New-Object System.Collections.ArrayList
+    $done = New-Object System.Collections.ArrayList
+
+    try {
+        # Phase 1: prepare every data stage before any data compression begins.
+        $prepareNumber = 0
+        foreach ($job in @($jobs | Sort-Object Id)) {
+            $prepareNumber++
+            $group = $job.Group
+            Set-BusyStatus ("Preparing block stage {0}/{1}: {2} ({3})..." -f $prepareNumber, $jobs.Count, ([string]$group.Name), ([string]$group.Method.Display))
+
+            $stagePath = New-GroupHardlinkStage $WorkRoot @($group.Files) $AllowGroupCopyFallback
+            [void](Normalize-XzStageIfNeeded $stagePath $group.Method)
+            $blockPath = Join-Path $BlocksDir ("$($job.Id)`_$($group.Name)$BlockSuffix$($group.Method.Extension)")
+
+            [void]$prepared.Add([pscustomobject]@{
+                Id       = [string]$job.Id
+                Group    = $group
+                Priority = [int]$job.Priority
+                Bytes    = [int64]$job.Bytes
+                Name     = [string]$job.Name
+                Stage    = [string]$stagePath
+                Block    = [string]$blockPath
+            })
+        }
+
+        # Phase 2: start only after all stages are ready.
+        $pending = New-Object System.Collections.ArrayList
+        $orderedPrepared = @(
+            $prepared |
+                Sort-Object `
+                    @{ Expression = { [int]$_.Priority }; Ascending = $true }, `
+                    @{ Expression = { [int64]$_.Bytes }; Descending = $true }, `
+                    @{ Expression = { [string]$_.Name }; Ascending = $true }
+        )
+        foreach ($job in $orderedPrepared) { [void]$pending.Add($job) }
+
+        $limit = Get-CompressionWorkerLimit $pending.Count
+        Set-BusyStatus ("All {0} data stages are ready. Starting {1} compression stream(s)..." -f $pending.Count, $limit)
+
+        while ($pending.Count -gt 0 -or $active.Count -gt 0) {
+            while ($pending.Count -gt 0 -and $active.Count -lt $limit) {
+                $job = $pending[0]
+                [void]$pending.RemoveAt(0)
+                $group = $job.Group
+
+                Set-BusyStatus ("Starting compression: {0} ({1}). Active={2}, pending={3}..." -f ([string]$group.Name), ([string]$group.Method.Display), ($active.Count + 1), $pending.Count)
+                $processData = Start-TarAsync $TarPath (@($group.Method.CreateArgs) + @($job.Block, '-C', $job.Stage, '.'))
+
+                [void]$active.Add([pscustomobject]@{
+                    Id       = [string]$job.Id
+                    Group    = $group
+                    Stage    = [string]$job.Stage
+                    Block    = [string]$job.Block
+                    P        = $processData.P
+                    E        = $processData.E
+                    Args     = $processData.Arguments
+                })
+            }
+
+            if ($active.Count -gt 0) {
+                $activeNames = @($active | ForEach-Object { [string]$_.Group.Name }) -join ', '
+                Set-BusyStatus ("Parallel compression: {0} active, {1} pending. Active: {2}" -f $active.Count, $pending.Count, $activeNames)
+            }
+
+            $finished = @($active | Where-Object { $_.P.HasExited })
+            if ($finished.Count -eq 0 -and $active.Count -gt 0) {
+                Start-Sleep -Milliseconds 100
+                continue
+            }
+
+            foreach ($job in $finished) {
+                [void]$active.Remove($job)
+                $job.P.WaitForExit()
+                $exitCode = $job.P.ExitCode
+
+                # Fully complete the asynchronous stderr read before disposing the
+                # process. GetAwaiter().GetResult() also exposes the real exception.
+                $errorText = ''
+                try {
+                    $errorText = [string]$job.E.GetAwaiter().GetResult()
+                }
+                catch {
+                    $errorText = "Unable to read TAR diagnostics: $($_.Exception.Message)"
+                }
+                try { $job.P.Dispose() } catch {}
+
+                Remove-SmartTarTempFolder $job.Stage
+
+                if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $job.Block)) {
+                    throw "Parallel block failed: $($job.Group.Name). Arguments: $($job.Args) Error: $errorText"
+                }
+
+                [void]$done.Add($job)
+            }
+        }
+
+        # Publish by stable ID, independent from runtime completion order.
+        foreach ($job in @($done | Sort-Object Id)) {
+            Add-BlockToStarOuterAndCleanup $TarPath $OuterArchivePath $WorkRoot ([ref]$blocks) $job.Id ([string]$job.Group.Name) $job.Block $job.Group.Method ([string]$job.Group.Reason + ' parallel block; all stages prepared before scheduling.') ([int]$job.Group.FileCount) 0 ([int64]$job.Group.Bytes)
+        }
+
+        return $blocks
+    }
+    finally {
+        foreach ($job in @($active)) {
+            try {
+                if (-not $job.P.HasExited) { $job.P.Kill() }
+            }
+            catch {}
+            try { $job.P.Dispose() } catch {}
+        }
+
+        foreach ($job in @($prepared)) {
+            Remove-SmartTarTempFolder ([string]$job.Stage)
+        }
+    }
 }
 
 function Build-AndPublishBlocksSequential {
@@ -3957,8 +4167,8 @@ Reset-SmartTarRuntimeState
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardOutput = $false
+    $psi.RedirectStandardError = $false
 
     $script:currentProcess = [System.Diagnostics.Process]::Start($psi)
 
@@ -4370,7 +4580,13 @@ $timer.Interval = 500
 $timer.Add_Tick({
     try {
         if (-not (Test-Blank $script:currentStatusFile) -and (Test-Path -LiteralPath $script:currentStatusFile)) {
-            $statusText = Get-Content -LiteralPath $script:currentStatusFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            $statusText = ''
+            try {
+                $statusText = Get-Content -LiteralPath $script:currentStatusFile -Raw -Encoding UTF8 -ErrorAction Stop
+            }
+            catch {
+                $statusText = ''
+            }
             if (-not (Test-Blank $statusText)) {
                 Set-BusyStatus ($statusText.Trim())
             }
@@ -4379,8 +4595,8 @@ $timer.Add_Tick({
         if ($script:currentProcess -and $script:currentProcess.HasExited) {
             $timer.Stop()
 
-            try { $script:currentStdOut = $script:currentProcess.StandardOutput.ReadToEnd() } catch { $script:currentStdOut = '' }
-            try { $script:currentStdErr = $script:currentProcess.StandardError.ReadToEnd() } catch { $script:currentStdErr = '' }
+            $script:currentStdOut = ''
+            $script:currentStdErr = ''
 
             $result = Read-WorkerResultFromTemp
             $completion = Resolve-WorkerCompletionFromTemp $result
