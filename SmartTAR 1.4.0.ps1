@@ -438,6 +438,42 @@ else {
     $script:UseNativeAnalyzer = $true
 }
 
+# Validate every prepared stage against its physical build plan before compression.
+if(-not('SmartTarStageValidator' -as [type])){Add-Type @"
+using System;
+using System.Collections.Generic;
+using System.IO;
+public static class SmartTarStageValidator {
+  static string Key(string root,string full){
+    string p=root+Path.DirectorySeparatorChar;
+    if(!full.StartsWith(p,StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Path escaped stage root: "+full);
+    return full.Substring(p.Length).Replace(Path.DirectorySeparatorChar,'/');
+  }
+  public static void Validate(string root,string[] paths,long[] sizes){
+    if(String.IsNullOrWhiteSpace(root)||!Directory.Exists(root))throw new DirectoryNotFoundException("Stage root does not exist: "+root);
+    if(paths==null||sizes==null||paths.Length!=sizes.Length)throw new InvalidDataException("Stage validation arrays are inconsistent.");
+    root=Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+    var expected=new Dictionary<string,long>(StringComparer.OrdinalIgnoreCase);long planned=0;
+    for(int i=0;i<paths.Length;i++){
+      string rel=(paths[i]??"").Replace('/',Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+      if(rel.Length==0||Path.IsPathRooted(rel))throw new InvalidDataException("Invalid planned stage path: "+paths[i]);
+      string full=Path.GetFullPath(Path.Combine(root,rel)),key=Key(root,full);
+      if(expected.ContainsKey(key))throw new InvalidDataException("Duplicate planned stage path: "+key);
+      var f=new FileInfo(full);if(!f.Exists)throw new FileNotFoundException("Missing stage file: "+key,full);
+      if(f.Length!=sizes[i])throw new InvalidDataException("Stage size mismatch: "+key+". Planned="+sizes[i]+", actual="+f.Length+".");
+      expected.Add(key,sizes[i]);checked{planned+=sizes[i];}
+    }
+    long count=0,bytes=0;
+    foreach(string path in Directory.EnumerateFiles(root,"*",SearchOption.AllDirectories)){
+      string full=Path.GetFullPath(path),key=Key(root,full);
+      if(!expected.ContainsKey(key))throw new InvalidDataException("Unexpected stage file: "+key);
+      count++;checked{bytes+=new FileInfo(full).Length;}
+    }
+    if(count!=paths.Length||bytes!=planned)throw new InvalidDataException("Stage totals differ from plan. Planned files="+paths.Length+", actual files="+count+", planned bytes="+planned+", actual bytes="+bytes+".");
+  }
+}
+"@}
+
 # ============================================================================
 # 01. Console handling
 # ============================================================================
@@ -1005,31 +1041,10 @@ if (-not (Test-Path -LiteralPath $tarPath)) {
 
 function Write-WorkerStatusFile {
     param([string]$Path, [string]$Text)
-
     if (Test-Blank $Path) { return }
-
-    $directory = Split-Path -Parent $Path
-    if (-not (Test-Blank $directory)) {
-        [System.IO.Directory]::CreateDirectory($directory) | Out-Null
-    }
-
-    $tempPath = $Path + '.writing.' + [guid]::NewGuid().ToString('N')
-    try {
-        $Text | Set-Content -LiteralPath $tempPath -Encoding UTF8 -ErrorAction Stop
-        for ($attempt = 1; $attempt -le 5; $attempt++) {
-            try {
-                Move-Item -LiteralPath $tempPath -Destination $Path -Force -ErrorAction Stop
-                return
-            }
-            catch {
-                if ($attempt -lt 5) { Start-Sleep -Milliseconds 40 }
-            }
-        }
-    }
-    catch {}
-    finally {
-        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
-    }
+    $dir=Split-Path -Parent $Path;if(-not(Test-Blank $dir)){[System.IO.Directory]::CreateDirectory($dir)|Out-Null}
+    $tmp=$Path+'.writing.'+[guid]::NewGuid().ToString('N')
+    try{$Text|Set-Content -LiteralPath $tmp -Encoding UTF8 -ErrorAction Stop;for($n=0;$n-lt 5;$n++){try{Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop;return}catch{Start-Sleep -Milliseconds 40}}}catch{}finally{Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue}
 }
 
 function Set-AppStatus {
@@ -2015,6 +2030,13 @@ function Normalize-XzStageIfNeeded {
     return $false
 }
 
+function Test-SmartTarPreparedStage {
+    param([string]$StageRoot,[hashtable]$Group)
+    $f=@($Group.Files);$p=New-Object string[] $f.Count;$z=New-Object long[] $f.Count
+    for($i=0;$i-lt$f.Count;$i++){$p[$i]=[string]$f[$i].Rel;$z[$i]=[int64]$f[$i].Bytes}
+    [SmartTarStageValidator]::Validate($StageRoot,$p,$z)
+}
+
 function Create-BlockFromStageDirect {
     param([string]$TarPath, [string]$StagePath, [string]$BlockPath, [hashtable]$Method)
 
@@ -2509,6 +2531,8 @@ function Build-AndPublishBlocksParallel {
 
             $stagePath = New-GroupHardlinkStage $WorkRoot @($group.Files) $AllowGroupCopyFallback
             [void](Normalize-XzStageIfNeeded $stagePath $group.Method)
+            Set-BusyStatus ("Validating prepared stage {0}/{1}: {2}..." -f $prepareNumber,$jobs.Count,([string]$group.Name))
+            Test-SmartTarPreparedStage $stagePath $group
             $blockPath = Join-Path $BlocksDir ("$($job.Id)`_$($group.Name)$BlockSuffix$($group.Method.Extension)")
 
             [void]$prepared.Add([pscustomobject]@{
@@ -4580,16 +4604,8 @@ $timer.Interval = 500
 $timer.Add_Tick({
     try {
         if (-not (Test-Blank $script:currentStatusFile) -and (Test-Path -LiteralPath $script:currentStatusFile)) {
-            $statusText = ''
-            try {
-                $statusText = Get-Content -LiteralPath $script:currentStatusFile -Raw -Encoding UTF8 -ErrorAction Stop
-            }
-            catch {
-                $statusText = ''
-            }
-            if (-not (Test-Blank $statusText)) {
-                Set-BusyStatus ($statusText.Trim())
-            }
+            $statusText='';try{$statusText=Get-Content -LiteralPath $script:currentStatusFile -Raw -Encoding UTF8 -ErrorAction Stop}catch{}
+            if(-not(Test-Blank $statusText)){Set-BusyStatus ($statusText.Trim())}
         }
 
         if ($script:currentProcess -and $script:currentProcess.HasExited) {
