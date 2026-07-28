@@ -977,7 +977,7 @@ function Get-SafeWorkerCount {
 }
 
 function Reset-SmartTarRuntimeState {
-    $script:ToolVersion = '1.4.0'
+    $script:ToolVersion = '1.4.0-streamed-add-uppercase'
     $script:FormatName = 'STAR'
     $script:FormatVersion = 1
     $script:ArchiveExtension = '.star'
@@ -2836,7 +2836,7 @@ function Get-SmartArchivePlannedExtractionTarget {
             [void]$targets.Add([pscustomobject]@{Kind='Primary';Path=$primary})
             $hasAdd=(@($manifest.addHistory).Count -gt 0)
             if(-not $hasAdd){foreach($root in @(Get-StarContentRoots $manifest)){if(([string]$root.name) -ieq 'ADD'){$hasAdd=$true;break}}}
-            if($hasAdd){[void]$targets.Add([pscustomobject]@{Kind='ADD';Path=(Join-Path $DestinationParent ($rootName+'_add'))})}
+            if($hasAdd){[void]$targets.Add([pscustomobject]@{Kind='ADD';Path=(Join-Path $DestinationParent ($rootName+'_ADD'))})}
             # Early preview roots were extracted beside the primary folder.
             foreach($root in @(Get-StarContentRoots $manifest)){
                 $name=(Convert-ToTarPath ([string]$root.name)).Trim('/').Trim()
@@ -2923,7 +2923,7 @@ function Copy-PayloadToFinalDestination {
         if(Test-Path -LiteralPath $primarySource){[System.IO.Directory]::CreateDirectory($primaryTarget)|Out-Null;Copy-DirectoryContents $primarySource $primaryTarget}
         $addSource=Join-Path $PayloadRoot 'ADD'
         if(Test-Path -LiteralPath $addSource){
-            $addTarget=Join-Path $DestinationParent ($rootName+'_add')
+            $addTarget=Join-Path $DestinationParent ($rootName+'_ADD')
             [System.IO.Directory]::CreateDirectory($addTarget)|Out-Null
             Copy-DirectoryContents $addSource $addTarget
         }
@@ -2943,7 +2943,7 @@ function Copy-PayloadToFinalDestination {
             # the internal ADD root into the selected parent directory.
             Remove-Item -LiteralPath $rawAddTarget -Recurse -Force -ErrorAction Stop
         }
-        if(-not(Test-Path -LiteralPath $primaryTarget) -and -not(Test-Path -LiteralPath (Join-Path $DestinationParent ($rootName+'_add')))){
+        if(-not(Test-Path -LiteralPath $primaryTarget) -and -not(Test-Path -LiteralPath (Join-Path $DestinationParent ($rootName+'_ADD')))){
             throw 'Multi-root extraction did not create either the primary or ADD destination.'
         }
         return
@@ -2989,6 +2989,21 @@ function Extract-Blocks {
     }
 
     return @($script:lastSalvageSkippedBlocks)
+}
+
+function Invoke-SmartTarStreamWholeBlock {
+ param([string]$TarPath,[string]$ArchivePath,$Block,[string]$DestinationFolder)
+ if($null-eq$Block){throw 'STAR block metadata is missing.'};$rb=(Convert-ToTarPath ([string]$Block.path)).Trim('/').Trim()
+ if(Test-Blank $rb-or-not(Test-RelativePathSafe $rb)){throw "Unsafe or empty STAR block path: $rb"};[System.IO.Directory]::CreateDirectory($DestinationFolder)|Out-Null
+ $x=[SmartTarStreamBridge]::Extract($TarPath,$ArchivePath,$rb,$DestinationFolder,'',$false)
+ if([int]$x.ProducerExitCode-ne 0){throw "Outer STAR streamed block read failed: $rb`r`n$($x.ProducerError)"};if([int]$x.ConsumerExitCode-ne 0){throw "Streamed block extraction failed: $rb`r`n$($x.ConsumerError)"}
+ if(-not(Test-Blank ([string]$Block.sha256))-and[string]$x.Sha256-ne([string]$Block.sha256).ToLowerInvariant()){throw "Block SHA256 mismatch during streamed extraction: $rb"}
+ if($null-ne$Block.sizeBytes-and[int64]$Block.sizeBytes-gt 0-and[int64]$x.StreamedBytes-ne[int64]$Block.sizeBytes){throw "Streamed block size mismatch: $rb. Expected $($Block.sizeBytes), actual $($x.StreamedBytes)."};return $x
+}
+function Extract-BlocksStreamed {
+ param([string]$TarPath,[string]$ArchivePath,$Blocks,[string]$DestinationFolder,[bool]$SalvageMode=$false);$script:lastSalvageSkippedBlocks=@()
+ foreach($b in @($Blocks)){$label="$($b.id) $($b.group) $($b.path)";try{Set-BusyStatus "Streaming block $($b.id) $($b.group)...";[void](Invoke-SmartTarStreamWholeBlock $TarPath $ArchivePath $b $DestinationFolder)}catch{if($SalvageMode){$script:lastSalvageSkippedBlocks+="SKIPPED: $label`r`nReason: $([string]$_.Exception.Message)";continue};throw}}
+ return @($script:lastSalvageSkippedBlocks)
 }
 
 function Get-SafePayloadPath {
@@ -3113,12 +3128,11 @@ function Extract-SmartArchive {
     [System.IO.Directory]::CreateDirectory($payload) | Out-Null
 
     try {
-        $safeArchive = Prepare-SafeArchiveInput $ArchivePath $work
-        Invoke-Tar $TarPath @('-xf', $safeArchive, '-C', $outer) 'Outer extraction failed.'
+        Invoke-Tar $TarPath @('-xf',$ArchivePath,'-C',$outer,'manifest.json') 'Outer manifest extraction failed.'
         $manifest = Read-OuterManifest $outer
         $r[10]=[string]$manifest.format; $r[11]=[string]$manifest.toolVersion; $r[12]=[string]$manifest.compressionProfile; $r[13]=[string]$manifest.compressionMode; $r[14]=[string]@($manifest.blocks).Count
         $r[25]=Format-GroupDiagnostics $manifest; $r[26]=Format-CompressionMethodSummary $manifest; $r[27]=Format-AdaptiveDiagnostics $manifest
-        [void](Extract-Blocks $TarPath $outer @($manifest.blocks) $payload $SalvageMode)
+        [void](Extract-BlocksStreamed $TarPath $ArchivePath @($manifest.blocks) $payload $SalvageMode)
         $aliasRestore = Restore-DedupAliases $manifest $payload $SalvageMode
         Copy-PayloadToFinalDestination $manifest $payload $DestinationFolder $ArchivePath
         $skipped = @($script:lastSalvageSkippedBlocks)
@@ -3135,48 +3149,13 @@ function Extract-SmartArchive {
 }
 
 function Verify-SmartArchive {
-    param([string]$TarPath,[string]$ArchivePath)
-    if(-not (Test-Path -LiteralPath $ArchivePath)){throw 'Archive path does not exist.'}
-    $r=@('')*32; $r[0]='Verify'; $r[1]='Archive verification completed.'; $r[20]=[string]$ArchivePath
-    $work=New-SafeWorkRoot 'verify' $ArchivePath; $outer=Join-Path $work 'outer'; $payload=Join-Path $work 'payload'; [System.IO.Directory]::CreateDirectory($outer)|Out-Null; [System.IO.Directory]::CreateDirectory($payload)|Out-Null
-    try{
-        $safeArchive=Prepare-SafeArchiveInput $ArchivePath $work; Invoke-Tar $TarPath @('-xf',$safeArchive,'-C',$outer) 'Outer verification failed.'; $manifest=Read-OuterManifest $outer; $blocks=@($manifest.blocks); $ok=0; $fail=0; $lines=@()
-        foreach($block in $blocks){
-            Set-BusyStatus "Verifying block $($block.id) $($block.group)..."
-            $blockPath=Resolve-SafeBlockPath $outer ([string]$block.path)
-            if(-not (Test-Path -LiteralPath $blockPath)){$fail++; $lines+="MISSING: $($block.path)"; continue}
-            $listed=Invoke-TarList $TarPath $blockPath
-            $listResult = Invoke-TarRaw $TarPath @('-tf', $blockPath)
-            if([int]$listResult.ExitCode -eq 0){
-                foreach($entry in @(([string]$listResult.Output) -split "`r?`n")){
-                    if(Test-Blank $entry){continue}
-                    if(-not (Test-RelativePathSafe $entry)){ $listed=$false; $lines+="UNSAFE ENTRY: $($block.path) -> $entry"; break }
-                }
-            }
-            $hashOk=$true; if($block.sha256){$hashOk=((Get-FileSHA256 $blockPath) -eq ([string]$block.sha256).ToLowerInvariant())}
-            if($listed -and $hashOk){
-                try {
-                    Invoke-Tar $TarPath @('-xf', $blockPath, '-C', $payload) "Block verification extraction failed: $($block.path)."
-                    $ok++
-                }
-                catch {
-                    $fail++
-                    $lines+="FAIL: $($block.id) $($block.group) $($block.path)"
-                }
-            }else{$fail++; $lines+="FAIL: $($block.id) $($block.group) $($block.path)"}
-        }
-        $aliasCheck = Test-DedupAliasesForManifest $manifest $payload
-        if([int]$aliasCheck.failed -gt 0){
-            $fail += [int]$aliasCheck.failed
-            foreach($detail in @($aliasCheck.details)){ $lines += "DEDUP ALIAS FAIL: $detail" }
-        }
-        $verification=if($fail -eq 0){'OK'}else{'FAILED'}
-        $r[10]=[string]$manifest.format; $r[11]=[string]$manifest.toolVersion; $r[12]=[string]$manifest.compressionProfile; $r[13]=[string]$manifest.compressionMode; $r[14]=[string]$blocks.Count; $r[15]=[string]$ok; $r[16]=[string]$fail; $r[17]=$verification
-        $r[25]=Format-GroupDiagnostics $manifest; $r[26]=Format-CompressionMethodSummary $manifest; $r[27]=Format-AdaptiveDiagnostics $manifest
-        if(@($manifest.dedupAliases).Count -gt 0){ $r[28]+="`r`n`r`nDedup alias verification:`r`nAliases: $($aliasCheck.total), OK: $($aliasCheck.ok), failed: $($aliasCheck.failed)" }
-        if($fail -gt 0 -and $lines.Count -gt 0){$r[28]+="`r`n`r`nFailed verification details:`r`n"+($lines -join "`r`n")}
-        return $r
-    }finally{Remove-SmartTarWorkAndRoot $work}
+ param([string]$TarPath,[string]$ArchivePath);if(-not(Test-Path -LiteralPath $ArchivePath)){throw 'Archive path does not exist.'};$r=@('')*32;$r[0]='Verify';$r[1]='Archive verification completed.';$r[20]=[string]$ArchivePath
+ $w=New-SafeWorkRoot 'verify' $ArchivePath;$o=Join-Path $w 'outer';$p=Join-Path $w 'payload';[System.IO.Directory]::CreateDirectory($o)|Out-Null;[System.IO.Directory]::CreateDirectory($p)|Out-Null
+ try{Invoke-Tar $TarPath @('-xf',$ArchivePath,'-C',$o,'manifest.json') 'Outer verification manifest extraction failed.';$m=Read-OuterManifest $o;$bs=@($m.blocks);$ok=0;$fail=0;$lines=@()
+ foreach($b in $bs){Set-BusyStatus "Verifying streamed block $($b.id) $($b.group)...";try{[void](Invoke-SmartTarStreamWholeBlock $TarPath $ArchivePath $b $p);$ok++}catch{$fail++;$lines+="FAIL: $($b.id) $($b.group) $($b.path)`r`n$([string]$_.Exception.Message)"}}
+ $ac=Test-DedupAliasesForManifest $m $p;if([int]$ac.failed-gt 0){$fail+=[int]$ac.failed;foreach($d in @($ac.details)){$lines+="DEDUP ALIAS FAIL: $d"}};$ver=if($fail-eq 0){'OK'}else{'FAILED'}
+ $r[10]=[string]$m.format;$r[11]=[string]$m.toolVersion;$r[12]=[string]$m.compressionProfile;$r[13]=[string]$m.compressionMode;$r[14]=[string]$bs.Count;$r[15]=[string]$ok;$r[16]=[string]$fail;$r[17]=$ver;$r[25]=Format-GroupDiagnostics $m;$r[26]=Format-CompressionMethodSummary $m;$r[27]=Format-AdaptiveDiagnostics $m
+ if(@($m.dedupAliases).Count-gt 0){$r[28]+="`r`n`r`nDedup alias verification:`r`nAliases: $($ac.total), OK: $($ac.ok), failed: $($ac.failed)"};if($fail-gt 0-and$lines.Count-gt 0){$r[28]+="`r`n`r`nFailed verification details:`r`n"+($lines-join"`r`n")};return $r}finally{Remove-SmartTarWorkAndRoot $w}
 }
 
 
@@ -3473,7 +3452,7 @@ function Extract-SmartArchiveSelection {
         }
         $sourceItem=Get-SafePayloadPath $payload $rel;if(-not(Test-Path -LiteralPath $sourceItem)){throw "Selected item was not restored from archive: $rel"}
         $leaf=Split-Path -Leaf (Convert-ToLocalPath $rel)
-        if($rel -ieq 'ADD'){$leaf=$sourceRoot+'_add'}
+        if($rel -ieq 'ADD'){$leaf=$sourceRoot+'_ADD'}
         if(Test-Blank $leaf){$leaf='selection'}
         $targetPath=Join-Path $DestinationParent $leaf
         if($IsFolder){[System.IO.Directory]::CreateDirectory($targetPath)|Out-Null;Copy-DirectoryContents $sourceItem $targetPath}else{Copy-Item -LiteralPath $sourceItem -Destination $targetPath -Force -ErrorAction Stop}
@@ -3654,13 +3633,8 @@ function Get-ArchiveSummary {
 # ============================================================================
 
 function Get-StarOuterData {
-    param([string]$TarPath,[string]$ArchivePath,[string]$WorkRoot)
-    $outer=Join-Path $WorkRoot 'outer'
-    [System.IO.Directory]::CreateDirectory($outer)|Out-Null
-    $safe=Prepare-SafeArchiveInput $ArchivePath $WorkRoot
-    Invoke-Tar $TarPath @('-xf',$safe,'-C',$outer) 'Existing STAR extraction failed.'
-    $manifest=Read-OuterManifest $outer
-    return [pscustomobject]@{ Outer=$outer; SafeArchive=$safe; Manifest=$manifest }
+ param([string]$TarPath,[string]$ArchivePath,[string]$WorkRoot,[bool]$ExtractBlocks=$true);$outer=Join-Path $WorkRoot 'outer';[System.IO.Directory]::CreateDirectory($outer)|Out-Null
+ if($ExtractBlocks){$safe=Prepare-SafeArchiveInput $ArchivePath $WorkRoot;Invoke-Tar $TarPath @('-xf',$safe,'-C',$outer) 'Existing STAR extraction failed.'}else{$safe=$ArchivePath;Invoke-Tar $TarPath @('-xf',$ArchivePath,'-C',$outer,'manifest.json') 'Existing STAR manifest extraction failed.'};$manifest=Read-OuterManifest $outer;return [pscustomobject]@{Outer=$outer;SafeArchive=$safe;Manifest=$manifest}
 }
 
 function Get-StarContentRoots {
@@ -3765,9 +3739,9 @@ function Remove-AddDuplicatesAgainstArchive {
         foreach($old in @($ExistingIndex[$key])){
             if(Test-Blank ([string]$old.Hash)){$old.Hash=Get-FileSHA256 ([string]$old.Path)}
             if([string]$old.Hash -eq $hash){
-                $aliasRel=Convert-ToTarPath (Get-RelativePathFromBase $AddStageParent $file.FullName)
-                [void]$aliases.Add([pscustomobject]@{ path=$aliasRel; target=[string]$old.Rel; bytes=$bytes })
-                Remove-Item -LiteralPath $file.FullName -Force
+                $aliasRel=(Convert-ToTarPath (Get-RelativePathFromBase $AddStageParent $file.FullName)).Trim('/').Trim();$targetRel=(Convert-ToTarPath ([string]$old.Rel)).Trim('/').Trim()
+                if(Test-Blank $aliasRel-or$aliasRel-eq'.'-or-not(Test-RelativePathSafe $aliasRel)){throw "ADD dedup produced an unsafe alias path: '$aliasRel'."};if(Test-Blank $targetRel-or$targetRel-eq'.'-or-not(Test-RelativePathSafe $targetRel)){throw "ADD dedup produced an unsafe target path: '$targetRel'."}
+                [void]$aliases.Add([pscustomobject]@{path=$aliasRel;target=$targetRel;bytes=$bytes});Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
                 break
             }
         }
@@ -3778,7 +3752,8 @@ function Remove-AddDuplicatesAgainstArchive {
 function Merge-StarAddManifest {
     param($OldManifest,$AddManifest,$CrossAliases,$AddInfo,$NewBlocks)
     $allBlocks=@($OldManifest.blocks)+@($NewBlocks)
-    $allAliases=@($OldManifest.dedupAliases)+@($AddManifest.dedupAliases)+@($CrossAliases)
+    $rawAliases=@($OldManifest.dedupAliases)+@($AddManifest.dedupAliases)+@($CrossAliases);$normalizedAliases=New-Object System.Collections.ArrayList
+    foreach($a in $rawAliases){if($null-eq$a){continue};$ap=(Convert-ToTarPath ([string]$a.path)).Trim('/').Trim();$tp=(Convert-ToTarPath ([string]$a.target)).Trim('/').Trim();if(Test-Blank $ap-or$ap-eq'.'-or-not(Test-RelativePathSafe $ap)){throw "Invalid ADD alias path before manifest merge: '$ap'."};if(Test-Blank $tp-or$tp-eq'.'-or-not(Test-RelativePathSafe $tp)){throw "Invalid ADD alias target before manifest merge: '$ap' -> '$tp'."};$ab=if($null-ne$a.bytes-and-not(Test-Blank ([string]$a.bytes))){[int64]$a.bytes}else{[int64]0};[void]$normalizedAliases.Add([pscustomobject]@{path=$ap;target=$tp;bytes=$ab})};$allAliases=@($normalizedAliases)
     $primary=(Convert-ToTarPath ([string]$OldManifest.sourceName)).Trim('/').Trim()
     if(Test-Blank $primary){$oldRoots=@(Get-StarContentRoots $OldManifest);if($oldRoots.Count -gt 0){$primary=[string]$oldRoots[0].name}}
     $roots=New-Object System.Collections.ArrayList
@@ -3825,12 +3800,12 @@ function Add-SmartArchive {
     $published=$false;$tempArchive=Join-Path ([System.IO.Path]::GetDirectoryName($Destination)) (([System.IO.Path]::GetFileName($Destination))+'.adding.tmp')
     try{
         Set-BusyStatus 'Reading existing STAR archive...'
-        $old=Get-StarOuterData $TarPath $Destination $work
+        $old=Get-StarOuterData $TarPath $Destination $work $false
         $manifest=$old.Manifest
         if([int]$manifest.formatVersion -gt 2){throw "Unsupported STAR formatVersion: $($manifest.formatVersion)"}
         $payload=Join-Path $work 'existing_payload';[System.IO.Directory]::CreateDirectory($payload)|Out-Null
         Set-BusyStatus 'Building existing dedup index...'
-        Extract-Blocks $TarPath $old.Outer @($manifest.blocks) $payload $false|Out-Null
+        Extract-BlocksStreamed $TarPath $Destination @($manifest.blocks) $payload $false|Out-Null
         # ADD dedup needs only physically stored block members. Existing aliases
         # remain in the manifest and are deliberately not materialized here.
         $existingIndex=New-ExistingContentDedupIndex $payload $manifest
@@ -4513,7 +4488,7 @@ function Show-ArchiveAddBrowseChoice {
 }
 
 $form = [System.Windows.Forms.Form]@{
-    Text            = 'SmartTAR - STAR 1.4.0  .:: Copyright © 2026 eco-by-different ::.'
+    Text            = 'SmartTAR - STAR 1.4.0 STREAMED ADD UPPERCASE  .:: Copyright © 2026 eco-by-different ::.'
     ClientSize      = (New-Size 505 490)
     StartPosition   = 'CenterScreen'
     BackColor       = $cBg
