@@ -801,6 +801,17 @@ function Write-ReportFile {
 # 16 blocks failed, 17 verification, 20 archive path, 21 destination,
 # 22 salvage, 25 groups, 26 method summary, 27 analysis, 28 details/warnings.
 
+function Get-ReportVersionNumber {
+    param([string]$Version)
+
+    # Reports show only the numeric semantic version. Experimental build
+    # suffixes stored in older manifests remain untouched inside the archive.
+    if (-not (Test-Blank $Version) -and $Version -match '^(\d+\.\d+\.\d+)') {
+        return [string]$matches[1]
+    }
+    return [string]$Version
+}
+
 function Format-OperationReport {
     param($R)
 
@@ -900,8 +911,12 @@ function Remove-SmartTarTempFolder {
         }
     }
 
+    # Last-resort cleanup. MiniPS can surface cmd.exe stderr only when the
+    # host closes, so suppress both output streams explicitly. The source
+    # path is never passed here; only SmartTAR-owned work folders are used.
+    if (-not (Test-Path -LiteralPath $Path)) { return }
     try {
-        cmd.exe /c "rmdir /s /q `"$Path`"" | Out-Null
+        & cmd.exe /d /c "rmdir /s /q `"$Path`"" 1>$null 2>$null
     }
     catch {}
 }
@@ -3126,7 +3141,7 @@ function Extract-SmartArchive {
     try {
         Invoke-Tar $TarPath @('-xf',$ArchivePath,'-C',$outer,'manifest.json') 'Outer manifest extraction failed.'
         $manifest = Read-OuterManifest $outer
-        $r[10]=[string]$manifest.format; $r[11]=[string]$manifest.toolVersion; $r[12]=[string]$manifest.compressionProfile; $r[13]=[string]$manifest.compressionMode; $r[14]=[string]@($manifest.blocks).Count
+        $r[10]=[string]$manifest.format; $r[11]=Get-ReportVersionNumber ([string]$manifest.toolVersion); $r[12]=[string]$manifest.compressionProfile; $r[13]=[string]$manifest.compressionMode; $r[14]=[string]@($manifest.blocks).Count
         $r[25]=Format-GroupDiagnostics $manifest; $r[26]=Format-CompressionMethodSummary $manifest; $r[27]=Format-AdaptiveDiagnostics $manifest
         [void](Extract-BlocksStreamed $TarPath $ArchivePath @($manifest.blocks) $payload $SalvageMode)
         $aliasRestore = Restore-DedupAliases $manifest $payload $SalvageMode
@@ -3150,7 +3165,7 @@ function Verify-SmartArchive {
  try{Invoke-Tar $TarPath @('-xf',$ArchivePath,'-C',$o,'manifest.json') 'Outer verification manifest extraction failed.';$m=Read-OuterManifest $o;$bs=@($m.blocks);$ok=0;$fail=0;$lines=@()
  foreach($b in $bs){Set-BusyStatus "Verifying streamed block $($b.id) $($b.group)...";try{[void](Invoke-SmartTarStreamWholeBlock $TarPath $ArchivePath $b $p);$ok++}catch{$fail++;$lines+="FAIL: $($b.id) $($b.group) $($b.path)`r`n$([string]$_.Exception.Message)"}}
  $ac=Test-DedupAliasesForManifest $m $p;if([int]$ac.failed-gt 0){$fail+=[int]$ac.failed;foreach($d in @($ac.details)){$lines+="DEDUP ALIAS FAIL: $d"}};$ver=if($fail-eq 0){'OK'}else{'FAILED'}
- $r[10]=[string]$m.format;$r[11]=[string]$m.toolVersion;$r[12]=[string]$m.compressionProfile;$r[13]=[string]$m.compressionMode;$r[14]=[string]$bs.Count;$r[15]=[string]$ok;$r[16]=[string]$fail;$r[17]=$ver;$r[25]=Format-GroupDiagnostics $m;$r[26]=Format-CompressionMethodSummary $m;$r[27]=Format-AdaptiveDiagnostics $m
+ $r[10]=[string]$m.format;$r[11]=Get-ReportVersionNumber ([string]$m.toolVersion);$r[12]=[string]$m.compressionProfile;$r[13]=[string]$m.compressionMode;$r[14]=[string]$bs.Count;$r[15]=[string]$ok;$r[16]=[string]$fail;$r[17]=$ver;$r[25]=Format-GroupDiagnostics $m;$r[26]=Format-CompressionMethodSummary $m;$r[27]=Format-AdaptiveDiagnostics $m
  if(@($m.dedupAliases).Count-gt 0){$r[28]+="`r`n`r`nDedup alias verification:`r`nAliases: $($ac.total), OK: $($ac.ok), failed: $($ac.failed)"};if($fail-gt 0-and$lines.Count-gt 0){$r[28]+="`r`n`r`nFailed verification details:`r`n"+($lines-join"`r`n")};return $r}finally{Remove-SmartTarWorkAndRoot $w}
 }
 
