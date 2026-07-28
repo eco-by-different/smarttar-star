@@ -3,6 +3,9 @@
 
 # SmartTAR 1.4.0
 
+Archives created by SmartTAR 1.3.2 and earlier from the root of a drive, including mounted ISO volumes, may contain flattened paths and missing files when different source paths collapsed to the same archive-relative path. Archives created from ordinary subfolders are substantially less likely to be affected. Recreate drive-root archives using SmartTAR 1.4.0 or later.
+--
+
 **SmartTAR STAR** is a Windows PowerShell GUI archiver and backup tool built around the Windows `tar.exe` / bsdtar engine.
 
 Version **1.4.0** introduces a block-based additive archive model with global file deduplication, independently selectable compression modes for each ADD generation, selective recovery, full integrity verification, and a canonical single-manifest layout.
