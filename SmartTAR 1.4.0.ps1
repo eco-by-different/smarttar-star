@@ -977,7 +977,7 @@ function Get-SafeWorkerCount {
 }
 
 function Reset-SmartTarRuntimeState {
-    $script:ToolVersion = '1.4.0-streamed-add-uppercase'
+    $script:ToolVersion = '1.4.0'
     $script:FormatName = 'STAR'
     $script:FormatVersion = 1
     $script:ArchiveExtension = '.star'
@@ -1016,8 +1016,6 @@ $script:currentAction = ''
 $script:pendingTargetPath = ''
 $script:pendingTargetAction = ''
 $script:openFolderAfter = $true
-$script:currentStdOut = ''
-$script:currentStdErr = ''
 Reset-SmartTarRuntimeState
 $script:IncludeDebugDiagnosticsInManifest = $false
 $script:ExportDebugBundle = $false
@@ -2459,8 +2457,6 @@ function Start-TarAsync {
     if ($null -eq $process) {
         throw "Unable to start TAR process. Arguments: $argumentString"
     }
-
-    try { $process.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal } catch {}
 
     $errorTask = $process.StandardError.ReadToEndAsync()
     return [pscustomobject]@{
@@ -4126,9 +4122,7 @@ function Start-WorkerOperation {
 
     $script:currentAction = $Action
     $script:openFolderAfter = [bool]$chkOpenFolder.Checked
-    $script:currentStdOut = ''
-    $script:currentStdErr = ''
-Reset-SmartTarRuntimeState
+        Reset-SmartTarRuntimeState
 
     'Starting...' | Set-Content -LiteralPath $script:currentStatusFile -Encoding UTF8
 
@@ -4488,7 +4482,7 @@ function Show-ArchiveAddBrowseChoice {
 }
 
 $form = [System.Windows.Forms.Form]@{
-    Text            = 'SmartTAR - STAR 1.4.0 STREAMED ADD UPPERCASE  .:: Copyright © 2026 eco-by-different ::.'
+    Text            = 'SmartTAR - STAR 1.4.0  .:: Copyright © 2026 eco-by-different ::.'
     ClientSize      = (New-Size 505 490)
     StartPosition   = 'CenterScreen'
     BackColor       = $cBg
@@ -4586,9 +4580,7 @@ $timer.Add_Tick({
         if ($script:currentProcess -and $script:currentProcess.HasExited) {
             $timer.Stop()
 
-            $script:currentStdOut = ''
-            $script:currentStdErr = ''
-
+                        
             $result = Read-WorkerResultFromTemp
             $completion = Resolve-WorkerCompletionFromTemp $result
 
