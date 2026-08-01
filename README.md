@@ -16,8 +16,6 @@
 
 **SmartTAR STAR** is a Windows PowerShell GUI archiver and backup tool built around the Windows `tar.exe` / bsdtar engine.
 
-Version **1.4.0** introduces a block-based additive archive model with global file deduplication, independently selectable compression modes for each ADD generation, selective recovery, full integrity verification, and a canonical single-manifest layout.
-
 SmartTAR is not only a TAR frontend. The `.star` format is a portable, single-file, block-based and deduplicating archive format designed for transparent recovery.
 
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
