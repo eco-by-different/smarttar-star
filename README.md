@@ -41,6 +41,8 @@ Main improvements
 - Expanded operation reports with timing, threading, scheduler, catalog and ADD statistics.
 - File deduplication remains available in all modes, including Store.
 
+---
+
 # SmartTAR 1.4.0
 
 ## Highlights
