@@ -1,7 +1,7 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/smarttar-star)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/smarttar-star)
 
-# SmartTAR 1.4.0
+# SmartTAR 1.5.0
 
 > [!CAUTION]
 > Archives created by SmartTAR 1.3.2 and earlier from the root of a drive,
@@ -27,6 +27,23 @@ SmartTAR is not only a TAR frontend. The `.star` format is a portable, single-fi
 * **Zero External Dependencies:** No external libraries, no DLLs, and no third-party software installations required (100% portable).
 * **Maximum System Cleanliness:** The application leaves zero footprint. It creates nothing but its own temporary working files, which are completely cleaned up immediately after completion.
 * **Smart Deployment:** A lightweight, single-file solution ready to be deployed and used anywhere instantly.
+
+Main improvements
+- Introduced a unified sealed source catalog reused by analysis, planning, deduplication, directory structure and browsing.
+- Reduced repeated source enumeration, path processing and intermediate planning operations.
+- Removed per-file JSONL planning writes from the main preparation pipeline.
+- Simplified archive creation to a sequential one-stage, one-bsdtar build model.
+- Added ZSTD22 and revised the Smart compression policy.
+- Added runtime detection of XZ and ZSTD multithreading support.
+- Added automatic single-thread compatibility retry when multithreaded compression is unsupported.
+- Centralized TAR argument generation with explicit PAX and GNU TAR handling.
+- Improved drive-root archive layout and logical browse presentation.
+- Added a compressed archive catalog with SHA-256 integrity verification.
+- Improved transactional ADD processing and cross-archive deduplication.
+- Expanded operation reports with timing, threading, scheduler, catalog and ADD statistics.
+- File deduplication remains available in all modes, including Store.
+
+# SmartTAR 1.4.0
 
 ## Highlights
 
