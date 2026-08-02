@@ -1,5 +1,5 @@
 ﻿# ============================================================================
-# SmartTAR - STAR v1.5.1 ZSTD Scanner Multi Root Browse Fix 6 Preview
+# SmartTAR - STAR v1.5.0
 # Windows PowerShell GUI archiver using Windows tar.exe / bsdtar
 # ============================================================================
 
@@ -1148,7 +1148,7 @@ function Get-SafeWorkerCount {
 }
 
 function Reset-SmartTarRuntimeState {
-    $script:ToolVersion = '1.5.1-zstdscan-multirootfix6'
+    $script:ToolVersion = '1.5.0'
     $script:FormatName = 'STAR'
     $script:FormatVersion = 1
     $script:ArchiveExtension = '.star'
@@ -4355,7 +4355,7 @@ function New-EcoCheck {
 function Show-Message {
     param(
         [string]$Message,
-        [string]$Title = 'SmartTAR STAR v1.5.0 Preview',
+        [string]$Title = 'SmartTAR STAR v1.5.0',
         [System.Windows.Forms.MessageBoxIcon]$Icon = [System.Windows.Forms.MessageBoxIcon]::Information,
         [System.Windows.Forms.MessageBoxButtons]$Buttons = [System.Windows.Forms.MessageBoxButtons]::OK
     )
@@ -4413,7 +4413,7 @@ function Show-ArchiveAddBrowseChoice {
 }
 
 $form = [System.Windows.Forms.Form]@{
-    Text            = 'SmartTAR - STAR 1.5.1 ZSTD Scanner Multi Root Browse Fix 6  .:: Copyright © 2026 eco-by-different ::.'
+    Text            = 'SmartTAR - STAR 1.5.0  .:: Copyright © 2026 eco-by-different ::.'
     ClientSize      = (New-Size 505 490)
     StartPosition   = 'CenterScreen'
     BackColor       = $cBg
