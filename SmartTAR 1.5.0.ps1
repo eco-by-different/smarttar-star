@@ -1,5 +1,5 @@
 ﻿# ============================================================================
-# SmartTAR - STAR v1.5.0 Preview
+# SmartTAR - STAR v1.5.1 ZSTD Scanner Multi Root Browse Fix 6 Preview
 # Windows PowerShell GUI archiver using Windows tar.exe / bsdtar
 # ============================================================================
 
@@ -436,6 +436,160 @@ public static class SmartTarNativeAnalyzer
 }
 else {
     $script:UseNativeAnalyzer = $true
+}
+
+# Streams tar.exe ZSTD output to the final block file and removes the
+# 512-byte stdout padding by parsing the ZSTD frame structure. The scanner is
+# bounded-memory and validates that every removed trailing byte is zero.
+if (-not ('SmartTarZstdBlockWriter' -as [type])) {
+Add-Type @"
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+
+public sealed class SmartTarZstdWriteResult
+{
+    public int ExitCode { get; set; }
+    public string Error { get; set; }
+    public long PaddedBytes { get; set; }
+    public long FrameBytes { get; set; }
+    public long RemovedPaddingBytes { get; set; }
+    public int ZstdBlocks { get; set; }
+    public bool Checksum { get; set; }
+}
+
+public static class SmartTarZstdBlockWriter
+{
+    private static string Q(string value)
+    {
+        if (value == null) return "\"\"";
+        return "\"" + value.Replace("\"", "\\\"") + "\"";
+    }
+
+    private static string JoinArgs(string[] args)
+    {
+        var b = new StringBuilder();
+        foreach (string a in args) {
+            if (b.Length > 0) b.Append(' ');
+            b.Append(Q(a));
+        }
+        return b.ToString();
+    }
+
+    private static int ReadByteChecked(FileStream s, string message)
+    {
+        int value = s.ReadByte();
+        if (value < 0) throw new InvalidDataException(message);
+        return value;
+    }
+
+    private static ulong ReadLE(FileStream s, int count, string message)
+    {
+        ulong value = 0;
+        for (int i = 0; i < count; i++) value |= ((ulong)ReadByteChecked(s, message)) << (8 * i);
+        return value;
+    }
+
+    private static void Skip(FileStream s, long count, string message)
+    {
+        if (count < 0 || s.Position + count > s.Length) throw new InvalidDataException(message);
+        s.Position += count;
+    }
+
+    private static SmartTarZstdWriteResult TrimFrame(string path)
+    {
+        using (var s = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) {
+            long padded = s.Length;
+            if (padded < 6) throw new InvalidDataException("ZSTD frame is too short.");
+            if (ReadByteChecked(s, "Missing ZSTD magic.") != 0x28 ||
+                ReadByteChecked(s, "Missing ZSTD magic.") != 0xB5 ||
+                ReadByteChecked(s, "Missing ZSTD magic.") != 0x2F ||
+                ReadByteChecked(s, "Missing ZSTD magic.") != 0xFD)
+                throw new InvalidDataException("ZSTD magic mismatch.");
+
+            int fd = ReadByteChecked(s, "Missing ZSTD frame descriptor.");
+            int dictFlag = fd & 3;
+            bool checksum = (fd & 4) != 0;
+            bool reserved = (fd & 8) != 0;
+            bool single = (fd & 32) != 0;
+            int fcsFlag = (fd >> 6) & 3;
+            if (reserved) throw new InvalidDataException("Reserved ZSTD frame-header bit is set.");
+            if (!single) ReadByteChecked(s, "Missing ZSTD window descriptor.");
+
+            int[] dictSizes = new int[] { 0, 1, 2, 4 };
+            int dictSize = dictSizes[dictFlag];
+            int fcsSize = fcsFlag == 0 ? (single ? 1 : 0) : (fcsFlag == 1 ? 2 : (fcsFlag == 2 ? 4 : 8));
+            Skip(s, dictSize + fcsSize, "Truncated ZSTD frame header.");
+
+            int blocks = 0;
+            while (true) {
+                uint h = (uint)ReadLE(s, 3, "Missing ZSTD block header.");
+                bool last = (h & 1) != 0;
+                int type = (int)((h >> 1) & 3);
+                int size = (int)((h >> 3) & 0x1FFFFF);
+                if (type == 3) throw new InvalidDataException("Reserved ZSTD block type.");
+                long payload = type == 1 ? 1 : size;
+                Skip(s, payload, "Truncated ZSTD block payload.");
+                blocks++;
+                if (last) break;
+            }
+            if (checksum) Skip(s, 4, "Missing ZSTD content checksum.");
+
+            long end = s.Position;
+            long padding = padded - end;
+            if (padding < 0 || padding >= 512) throw new InvalidDataException("Unexpected ZSTD stdout padding length: " + padding + ".");
+            for (long i = 0; i < padding; i++) {
+                if (ReadByteChecked(s, "Truncated ZSTD stdout padding.") != 0)
+                    throw new InvalidDataException("Non-zero data found after the ZSTD frame.");
+            }
+            s.SetLength(end);
+            s.Flush(true);
+            return new SmartTarZstdWriteResult {
+                ExitCode = 0, Error = "", PaddedBytes = padded, FrameBytes = end,
+                RemovedPaddingBytes = padding, ZstdBlocks = blocks, Checksum = checksum
+            };
+        }
+    }
+
+    public static SmartTarZstdWriteResult Create(string tarPath, string[] args, string outputPath)
+    {
+        if (String.IsNullOrWhiteSpace(tarPath) || !File.Exists(tarPath))
+            throw new FileNotFoundException("tar.exe was not found.", tarPath);
+        string directory = Path.GetDirectoryName(outputPath);
+        if (!String.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+        if (File.Exists(outputPath)) File.Delete(outputPath);
+
+        var errors = new StringBuilder();
+        var psi = new ProcessStartInfo {
+            FileName = tarPath, Arguments = JoinArgs(args), UseShellExecute = false,
+            CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        using (var p = new Process()) {
+            p.StartInfo = psi;
+            p.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) {
+                if (e.Data != null) { lock (errors) errors.AppendLine(e.Data); }
+            };
+            if (!p.Start()) throw new InvalidOperationException("Cannot start tar.exe.");
+            p.BeginErrorReadLine();
+            using (var output = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1024 * 1024)) {
+                p.StandardOutput.BaseStream.CopyTo(output, 1024 * 1024);
+                output.Flush(true);
+            }
+            p.WaitForExit();
+            p.WaitForExit();
+            if (p.ExitCode != 0) {
+                try { File.Delete(outputPath); } catch { }
+                return new SmartTarZstdWriteResult { ExitCode = p.ExitCode, Error = errors.ToString().Trim() };
+            }
+        }
+        SmartTarZstdWriteResult result = TrimFrame(outputPath);
+        result.Error = errors.ToString().Trim();
+        return result;
+    }
+}
+"@
 }
 
 # Validate every prepared stage against its physical build plan before compression.
@@ -994,7 +1148,7 @@ function Get-SafeWorkerCount {
 }
 
 function Reset-SmartTarRuntimeState {
-    $script:ToolVersion = '1.5.0'
+    $script:ToolVersion = '1.5.1-zstdscan-multirootfix6'
     $script:FormatName = 'STAR'
     $script:FormatVersion = 1
     $script:ArchiveExtension = '.star'
@@ -1934,6 +2088,25 @@ function Test-SmartTarPreparedStage {
 function Create-BlockFromStageDirect {
     param([string]$TarPath,[string]$StagePath,[string]$BlockPath,[hashtable]$Method,[bool]$ForceSingleThread=$false,[ValidateSet('pax','gnutar')][string]$TarFormat='pax')
     [void](Normalize-XzStageIfNeeded $StagePath $Method)
+
+    if ([string]$Method.Algorithm -eq 'zstd') {
+        # Windows bsdtar pads binary stdout to its TAR blocking factor. Build C
+        # proved that -b 1 limits this to <512 bytes and that the ZSTD frame can
+        # be parsed and trimmed without changing archive contents.
+        $createArgs = @(Get-TarCreateArguments $Method $script:tarCapabilities $script:CompressionThreads $ForceSingleThread $TarFormat)
+        $args = @($createArgs[0..($createArgs.Count-2)]) + @('-b', '1', $createArgs[-1], '-', '-C', $StagePath, '.')
+        $result = [SmartTarZstdBlockWriter]::Create($TarPath, [string[]]$args, $BlockPath)
+        if ([int]$result.ExitCode -ne 0) {
+            $detail = [string]$result.Error
+            if (Test-Blank $detail) { $detail = 'No tar.exe error output captured.' }
+            throw "Block creation failed: $BlockPath. tar.exe exit code: $($result.ExitCode)`r`n$detail"
+        }
+        if (-not (Test-Path -LiteralPath $BlockPath -PathType Leaf) -or [int64](Get-Item -LiteralPath $BlockPath).Length -ne [int64]$result.FrameBytes) {
+            throw "ZSTD frame publication validation failed: $BlockPath"
+        }
+        return
+    }
+
     Invoke-Tar $TarPath (@(Get-TarCreateArguments $Method $script:tarCapabilities $script:CompressionThreads $ForceSingleThread $TarFormat)+@($BlockPath,'-C',$StagePath,'.')) "Block creation failed: $BlockPath."
 }
 
@@ -2511,11 +2684,10 @@ function Get-SmartArchivePlannedExtractionTarget {
             }
         }
         elseif($sourceType-eq'DriveRoot'){
-            $top=@{}
-            if($null-ne$manifest.browseIndex-and[int]$manifest.browseIndex.schema-eq2){foreach($ib in @($manifest.browseIndex.blocks)){foreach($f in @($ib.files)){$rel=(Convert-ToTarPath ([string]$f)).Trim('/').Trim();if(-not(Test-Blank $rel)){$top[($rel.Split('/')[0]).ToLowerInvariant()]=$rel.Split('/')[0]}}};foreach($d in @($manifest.browseIndex.emptyDirectories)){$row=@($d);if($row.Count-eq2){$rel=(Convert-ToTarPath ([string]$row[1])).Trim('/').Trim();if(-not(Test-Blank $rel)){$top[($rel.Split('/')[0]).ToLowerInvariant()]=$rel.Split('/')[0]}}};foreach($a in @($manifest.dedupAliases)){$rel=(Convert-ToTarPath ([string]$a.path)).Trim('/').Trim();if(-not(Test-Blank $rel)){$top[($rel.Split('/')[0]).ToLowerInvariant()]=$rel.Split('/')[0]}}}
-            foreach($name in $top.Values){[void]$targets.Add([pscustomobject]@{Kind='DriveRoot item';Path=(Join-Path $DestinationParent $name)})}
-        }
-        elseif(($sourceType -eq 'Folder' -or $sourceType -eq 'File') -and -not(Test-Blank $rootName) -and $rootName -ne '.'){
+        if(Test-Blank $rootName){$rootName=Get-ArchiveBaseNameWithoutSmartExtension $ArchivePath}
+        [void]$targets.Add([pscustomobject]@{Kind='DriveRoot container';Path=(Join-Path $DestinationParent $rootName)})
+    }
+    elseif(($sourceType -eq 'Folder' -or $sourceType -eq 'File') -and -not(Test-Blank $rootName) -and $rootName -ne '.'){
             [void]$targets.Add([pscustomobject]@{Kind=$sourceType;Path=(Join-Path $DestinationParent $rootName)})
         }
         else{
@@ -2631,12 +2803,15 @@ function Copy-PayloadToFinalDestination {
         if(Test-Path -LiteralPath $addSource){$expectedAddTarget=Join-Path $DestinationParent ($rootName+'_ADD');if(-not(Test-Path -LiteralPath $expectedAddTarget)){throw 'Multi-root extraction did not create the ADD destination.'}}
         return
     }
-    if($sourceType-eq'DriveRoot'){Copy-DirectoryContents $PayloadRoot $DestinationParent;return}
-    if($sourceType -eq 'Folder' -and -not(Test-Blank $rootName)){
-        $finalRoot=Join-Path $DestinationParent $rootName
+    if(($sourceType -eq 'DriveRoot' -or $sourceType -eq 'Folder') -and -not(Test-Blank $rootName)){
+        $safeRootLeaf=Split-Path -Leaf (Convert-ToLocalPath $rootName)
+        if(Test-Blank $safeRootLeaf){$safeRootLeaf=Get-ArchiveBaseNameWithoutSmartExtension $ArchivePath}
+        if(Test-Blank $safeRootLeaf){$safeRootLeaf='SmartTAR_Root'}
+        $finalRoot=Join-Path $DestinationParent $safeRootLeaf
         [System.IO.Directory]::CreateDirectory($finalRoot)|Out-Null
-        $rootInPayload=Join-Path $PayloadRoot $rootName
-        if(Test-Path -LiteralPath $rootInPayload){Copy-DirectoryContents $rootInPayload $finalRoot}else{Copy-DirectoryContents $PayloadRoot $finalRoot}
+        $rootInPayload=Join-Path $PayloadRoot (Convert-ToLocalPath $rootName)
+        if(Test-Path -LiteralPath $rootInPayload -PathType Container){Copy-DirectoryContents $rootInPayload $finalRoot}else{Copy-DirectoryContents $PayloadRoot $finalRoot}
+        if(-not(Test-Path -LiteralPath $finalRoot -PathType Container)){throw "Extraction did not create named source root: $safeRootLeaf"}
         return
     }
     Copy-DirectoryContents $PayloadRoot $DestinationParent
@@ -3036,8 +3211,25 @@ function Extract-SmartArchiveSelectionLegacy {
         [void](Restore-DedupAliases $manifest $payload $false)
 
         $displayRel=(Convert-ToTarPath ([string]$RelativePath)).Trim('/').Trim()
-        $rel=if(Test-Blank $StoredPath){$displayRel}else{(Convert-ToTarPath $StoredPath).Trim('/').Trim()}
+        $primaryRootMarker='__SMARTTAR_PRIMARY_VIRTUAL_ROOT__'
+        $genericRootMarker='__SMARTTAR_VIRTUAL_ROOT__'
+        $isPrimaryVirtual=(([string]$StoredPath) -eq $primaryRootMarker)
+        $rel=if($isPrimaryVirtual -or ([string]$StoredPath) -eq $genericRootMarker){''}elseif(Test-Blank $StoredPath){$displayRel}else{(Convert-ToTarPath $StoredPath).Trim('/').Trim()}
         if (Test-Blank $rel) {
+            if(-not(Test-Blank $displayRel) -and $IsFolder){
+                $leaf=Split-Path -Leaf (Convert-ToLocalPath $displayRel)
+                if(Test-Blank $leaf){$leaf=Get-ArchiveRootName $manifest $ArchivePath}
+                if(Test-Blank $leaf){$leaf='selection'}
+                $targetPath=Join-Path $DestinationParent $leaf
+                [System.IO.Directory]::CreateDirectory($targetPath)|Out-Null
+                foreach($item in @(Get-ChildItem -LiteralPath $payload -Force -ErrorAction Stop)){
+                    if($isPrimaryVirtual -and ([string]$item.Name -ieq 'ADD')){continue}
+                    $target=Join-Path $targetPath ([string]$item.Name)
+                    if($item.PSIsContainer){[System.IO.Directory]::CreateDirectory($target)|Out-Null;Copy-DirectoryContents $item.FullName $target}else{Copy-Item -LiteralPath $item.FullName -Destination $target -Force -ErrorAction Stop}
+                }
+                if(-not(Test-Path -LiteralPath $targetPath -PathType Container)){throw "Virtual root extraction did not create output: $targetPath"}
+                return $targetPath
+            }
             Copy-DirectoryContents $payload $DestinationParent
             return $DestinationParent
         }
@@ -3133,7 +3325,9 @@ function Extract-SmartArchiveSelection {
     $storedRel=Get-SmartArchiveStoredSelectionPath $rel $BrowseData
     $sourceRoot='';if($null -ne $BrowseData -and $null -ne $BrowseData.Manifest){$sourceRoot=(Convert-ToTarPath ([string]$BrowseData.Manifest.sourceName)).Trim('/').Trim()}
     $multiRoot=($null -ne $BrowseData -and $null -ne $BrowseData.Manifest -and @($BrowseData.Manifest.contentRoots).Count -gt 1)
-    if((Test-Blank $rel) -or (-not $multiRoot -and -not(Test-Blank $sourceRoot) -and $rel.Equals($sourceRoot,[System.StringComparison]::OrdinalIgnoreCase))){return (Extract-SmartArchiveSelectionLegacy $TarPath $ArchivePath $RelativePath $IsFolder $DestinationParent $storedRel)}
+    $isPrimaryRoot=(-not(Test-Blank $sourceRoot) -and $rel.Equals($sourceRoot,[System.StringComparison]::OrdinalIgnoreCase))
+    if($isPrimaryRoot){return (Extract-SmartArchiveSelectionLegacy $TarPath $ArchivePath $RelativePath $IsFolder $DestinationParent '__SMARTTAR_PRIMARY_VIRTUAL_ROOT__')}
+    if(Test-Blank $rel){return (Extract-SmartArchiveSelectionLegacy $TarPath $ArchivePath $RelativePath $IsFolder $DestinationParent '__SMARTTAR_VIRTUAL_ROOT__')}
     if($null -eq $BrowseData -or $null -eq $BrowseData.EntryMap){return (Extract-SmartArchiveSelectionLegacy $TarPath $ArchivePath $RelativePath $IsFolder $DestinationParent $storedRel)}
     $entryKey=$rel.ToLowerInvariant();if(-not $BrowseData.EntryMap.ContainsKey($entryKey)){return (Extract-SmartArchiveSelectionLegacy $TarPath $ArchivePath $RelativePath $IsFolder $DestinationParent $storedRel)}
     if(-not(Test-Path -LiteralPath $ArchivePath)){throw 'Archive path does not exist.'};if(Test-Blank $DestinationParent){throw 'Destination folder is empty.'};[System.IO.Directory]::CreateDirectory($DestinationParent)|Out-Null
@@ -4219,7 +4413,7 @@ function Show-ArchiveAddBrowseChoice {
 }
 
 $form = [System.Windows.Forms.Form]@{
-    Text            = 'SmartTAR - STAR 1.5.0  .:: Copyright © 2026 eco-by-different ::.'
+    Text            = 'SmartTAR - STAR 1.5.1 ZSTD Scanner Multi Root Browse Fix 6  .:: Copyright © 2026 eco-by-different ::.'
     ClientSize      = (New-Size 505 490)
     StartPosition   = 'CenterScreen'
     BackColor       = $cBg
