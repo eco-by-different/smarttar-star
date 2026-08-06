@@ -34,6 +34,20 @@ SmartTAR is not only a TAR frontend. The `.star` format is a portable, single-fi
 - Restored the compact window size.
 - No changes to the STAR format or archive engine.
 
+# Antivirus Notice (False Positives)
+
+The `.exe` binary is generated using PS2EXE, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
+
+The underlying PowerShell script is clean.  
+If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` script instead.
+
+---
+
+## Screenshot
+
+
+![SmartTAR screenshot](docs/images/smarttar-gui.png)
+
 ---
 
 # SmartTAR 1.5.0
@@ -77,23 +91,9 @@ Main improvements
 - Persistent TXT reports for Create, ADD, Extract, and Verify
 - Read compatibility with released STAR v1 archives
 
-# Antivirus Notice (False Positives)
-
-The `.exe` binary is generated using PS2EXE, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
-
-The underlying PowerShell script is clean.  
-If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` script instead.
-
 ---
 
-## Screenshot
-
-
-![SmartTAR screenshot](docs/images/smarttar-gui.png)
-
----
-
-# SmartTAR 1.3.2
+## SmartTAR 1.3.2
 
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
 
