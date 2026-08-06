@@ -1,7 +1,7 @@
 ![Repo size](https://img.shields.io/github/repo-size/eco-by-different/smarttar-star)
 ![Last commit](https://img.shields.io/github/last-commit/eco-by-different/smarttar-star)
 
-# SmartTAR 1.5.0
+# SmartTAR 1.5.1
 
 > [!CAUTION]
 > Archives created by SmartTAR 1.3.2 and earlier from the root of a drive,
@@ -25,6 +25,18 @@ SmartTAR is not only a TAR frontend. The `.star` format is a portable, single-fi
 * **Zero External Dependencies:** No external libraries, no DLLs, and no third-party software installations required (100% portable).
 * **Maximum System Cleanliness:** The application leaves zero footprint. It creates nothing but its own temporary working files, which are completely cleaned up immediately after completion.
 * **Smart Deployment:** A lightweight, single-file solution ready to be deployed and used anywhere instantly.
+
+## Release Notes
+
+- Added a color-coded operation log with timestamps.
+- Added progress, completion, error, and report information to the main window.
+- Removed the indeterminate progress bar and final result pop-ups.
+- Restored the compact window size.
+- No changes to the STAR format or archive engine.
+
+---
+
+# SmartTAR 1.5.0
 
 Main improvements
 - Introduced a unified sealed source catalog reused by analysis, planning, deduplication, directory structure and browsing.
