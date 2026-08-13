@@ -20,7 +20,8 @@ SmartTAR is not only a TAR frontend. The `.star` format is a portable, single-fi
 
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
 
-### Core Principles
+## Core Principles
+
 * **Built in Windows, for Windows:** It relies exclusively on tools and components that are already baked into the operating system (Windows 10/11).
 * **Zero External Dependencies:** No external libraries, no DLLs, and no third-party software installations required (100% portable).
 * **Maximum System Cleanliness:** The application leaves zero footprint. It creates nothing but its own temporary working files, which are completely cleaned up immediately after completion.
@@ -34,9 +35,11 @@ SmartTAR is not only a TAR frontend. The `.star` format is a portable, single-fi
 - Restored the compact window size.
 - No changes to the STAR format or archive engine.
 
+---
+
 # Antivirus Notice (False Positives)
 
-The `.exe` binary is generated using PS2EXE, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
+The `.exe` binary is generated, which some sensitive antivirus engines, including Windows Defender or machine-learning based scanners, may flag as a false positive.
 
 The underlying PowerShell script is clean.  
 If your system blocks the `.exe`, you can safely run the raw `SmartTAR.ps1` script instead.
