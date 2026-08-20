@@ -48,7 +48,6 @@ The underlying PowerShell script is clean. If your system blocks the `.exe`, you
 ![SmartTAR screenshot](docs/images/smarttar-gui.png)
 
 ---
-
 # SmartTAR 1.5.0
 
 Main improvements
@@ -67,7 +66,6 @@ Main improvements
 - File deduplication remains available in all modes, including Store.
 
 ---
-
 # SmartTAR 1.4.0
 
 ## Highlights
@@ -91,7 +89,6 @@ Main improvements
 - Read compatibility with released STAR v1 archives
 
 ---
-
 ## SmartTAR 1.3.2
 
 **A native Windows TAR orchestrator** – a lightweight, portable, and smart solution designed for instant deployment.
@@ -119,7 +116,6 @@ SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`
 - STAR format version remains unchanged and existing archives remain compatible.
 
 ---
-
 ## SmartTAR - STAR 1.3.1
 
 ## Release Notes
@@ -128,7 +124,6 @@ SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`
 - Rebuilt with a lightweight launcher to reduce file size and eliminate the console window
 
 ---
-
 ## SmartTAR - STAR 1.3.0
 
 ## Release Notes
@@ -143,13 +138,11 @@ SmartTAR is a standard orchestrator built on top of the native Windows `tar.exe`
 - Updated GUI/version to SmartTAR STAR 1.3.0.
 
 ---
-
 ## SmartTAR - STAR 1.2.2
 
 **v1.2.2 - Full Sequential Build Pipeline, Compact Manifest, Hidden Work Folder, and Stable STAR Compatibility**
 
 ---
-
 ## Release Notes
 
 SmartTAR - STAR v1.2.2 is a stability, storage-efficiency, and cleanup release for the STAR v1.2 line.
@@ -214,7 +207,6 @@ rename .star.tmp to final .star
 This reduces peak temporary disk usage because SmartTAR no longer needs to keep all generated block files and the final STAR archive at the same time.
 
 ---
-
 ## Hidden Destination-Local Work Folder
 
 SmartTAR now creates its build work folder next to the destination archive.
@@ -295,7 +287,6 @@ If a problem needs deeper investigation, these variables can be enabled in a deb
 This gives SmartTAR a cleaner production manifest while keeping development diagnostics available when required.
 
 ---
-
 ## Manifest-Based File Deduplication
 
 SmartTAR - STAR v1.2.2 keeps the unique-only manifest alias dedup model.
@@ -327,7 +318,6 @@ Aliases: 5, restored: 5, errors: 0
 ```
 
 ---
-
 ## C# Native Analyzer
 
 SmartTAR continues to use the embedded C# native analyzer introduced in the v1.2 line.
@@ -359,7 +349,6 @@ reporting
 ```
 
 ---
-
 ## Smart Profile Behavior
 
 The `Smart - max compression` profile uses content-aware planning.
@@ -380,7 +369,6 @@ Compressible data is grouped and compressed using the best available configured 
 This avoids wasting CPU on data that is already compressed while still achieving strong compression on text, binary, and structured data.
 
 ---
-
 ## Compression Profiles
 
 Available profiles:
@@ -393,7 +381,6 @@ Store - no compression
 ```
 
 ---
-
 ## STAR Format Compatibility
 
 SmartTAR - STAR v1.2.2 keeps the STAR archive format version compatible with the existing v1.x layout.
@@ -438,7 +425,6 @@ salvage-friendly structure
 ```
 
 ---
-
 ## User-Facing Report Cleanup
 
 SmartTAR v1.2.2 replaces verbose diagnostic-style output with shorter summaries.
@@ -476,7 +462,6 @@ Manifest position: last-outer-entry
 ```
 
 ---
-
 ## Validation Summary
 
 SmartTAR - STAR v1.2.2 was validated across the main workflows:
@@ -514,7 +499,6 @@ archive extracted back to another drive
 ```
 
 ---
-
 ## What Changed Since v1.2.1
 
 Added:
@@ -581,7 +565,6 @@ no external compressor dependencies
 SmartTAR gets more practical value from the built-in Windows archiving backend through better orchestration.
 
 ---
-
 ## Summary
 
 SmartTAR - STAR v1.2.2 is a stability and architecture cleanup release for the STAR v1.2 line.
@@ -602,7 +585,6 @@ STAR formatVersion = 1 compatibility
 This release is the recommended stable v1.2.x build.
 
 ---
-
 ## License
 
 MIT License
