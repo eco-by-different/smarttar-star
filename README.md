@@ -45,7 +45,6 @@ The underlying PowerShell script is clean. If your system blocks the `.exe`, you
 ---
 ## Screenshot
 
-
 ![SmartTAR screenshot](docs/images/smarttar-gui.png)
 
 ---
