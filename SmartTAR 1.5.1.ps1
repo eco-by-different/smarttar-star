@@ -668,6 +668,7 @@ function New-Size {
     param([int]$Width, [int]$Height)
     return [System.Drawing.Size]::new($Width, $Height)
 }
+function C($Hex) { [System.Drawing.ColorTranslator]::FromHtml($Hex) }
 
 function Convert-ToTarPath {
     param([string]$Path)
@@ -1115,25 +1116,25 @@ function New-SafeWorkRoot {
 # 04. UI state and status bridge
 # ============================================================================
 # Royal Black Noir single-theme palette
-$cBg           = [System.Drawing.ColorTranslator]::FromHtml('#191B20')
-$cSurface      = [System.Drawing.ColorTranslator]::FromHtml('#242832')
-$cSurfaceAlt   = [System.Drawing.ColorTranslator]::FromHtml('#2D3340')
-$cInput        = [System.Drawing.ColorTranslator]::FromHtml('#15171C')
-$cText         = [System.Drawing.ColorTranslator]::FromHtml('#E3E6EB')
-$cTextMuted    = [System.Drawing.ColorTranslator]::FromHtml('#A9B1BF')
-$cGray         = [System.Drawing.ColorTranslator]::FromHtml('#505968')
-$cRoyal        = [System.Drawing.ColorTranslator]::FromHtml('#4B6698')
-$cRoyalHover   = [System.Drawing.ColorTranslator]::FromHtml('#607DB0')
-$cRoyalActive  = [System.Drawing.ColorTranslator]::FromHtml('#38527E')
-$cSuccess      = [System.Drawing.ColorTranslator]::FromHtml('#477B5E')
-$cSuccessHover = [System.Drawing.ColorTranslator]::FromHtml('#56896B')
-$cSuccessDown  = [System.Drawing.ColorTranslator]::FromHtml('#37664B')
-$cVerify       = [System.Drawing.ColorTranslator]::FromHtml('#46505C')
-$cVerifyHover  = [System.Drawing.ColorTranslator]::FromHtml('#596574')
-$cWarning      = [System.Drawing.ColorTranslator]::FromHtml('#D0A354')
-$cDanger       = [System.Drawing.ColorTranslator]::FromHtml('#C65E62')
-$cStatusOk     = [System.Drawing.ColorTranslator]::FromHtml('#72B88A')
-$cButtonText   = [System.Drawing.ColorTranslator]::FromHtml('#F2F4F7')
+$cBg           = C '#191B20'
+$cSurface      = C '#242832'
+$cSurfaceAlt   = C '#2D3340'
+$cInput        = C '#15171C'
+$cText         = C '#E3E6EB'
+$cTextMuted    = C '#A9B1BF'
+$cGray         = C '#505968'
+$cRoyal        = C '#4B6698'
+$cRoyalHover   = C '#607DB0'
+$cRoyalActive  = C '#38527E'
+$cSuccess      = C '#477B5E'
+$cSuccessHover = C '#56896B'
+$cSuccessDown  = C '#37664B'
+$cVerify       = C '#46505C'
+$cVerifyHover  = C '#596574'
+$cWarning      = C '#D0A354'
+$cDanger       = C '#C65E62'
+$cStatusOk     = C '#72B88A'
+$cButtonText   = C '#F2F4F7'
 
 $fNormal = [System.Drawing.Font]::new('Segoe UI', 9)
 $fBold = [System.Drawing.Font]::new('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
@@ -1242,7 +1243,7 @@ function Add-StatusRecordsToOutput {
         $color = $cTextMuted
         $text = $record
         if ($parts.Count -eq 2 -and $parts[0] -match '^#[0-9A-Fa-f]{6}$') {
-            try { $color = [System.Drawing.ColorTranslator]::FromHtml($parts[0]) } catch { $color = $cTextMuted }
+            try { $color = C $parts[0] } catch { $color = $cTextMuted }
             $text = $parts[1]
         }
         Add-ColoredOutputLine $text $color
